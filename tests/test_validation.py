@@ -44,13 +44,45 @@ def test_validate_missing_timestamp():
     res = validate_and_normalize_events(events)
     assert len(res.rejected) == 1
 
-def test_negative_latency_rejected_or_flagged():
+def test_negative_latency_is_dropped_and_flagged():
+    """Invalid latency is dropped from the event, which is kept but flagged."""
     events = [{
         "timestamp": "2026-10-18T10:00:12Z",
         "host_id": "web-01",
         "service": "web-api",
         "event_type": "http_request",
         "attributes": {"latency_ms": -10}
+    }]
+    res = validate_and_normalize_events(events)
+    # Event is retained (not silently discarded) but flagged as partially usable.
+    assert len(res.accepted) == 1
+    assert len(res.rejected) == 0
+    assert len(res.partially_usable) == 1
+    # Invalid latency must not survive into the accepted event.
+    assert "latency_ms" not in res.accepted[0].attributes
+
+
+def test_text_latency_is_dropped_and_flagged():
+    events = [{
+        "timestamp": "2026-10-18T10:00:12Z",
+        "host_id": "web-01",
+        "service": "web-api",
+        "event_type": "http_request",
+        "attributes": {"latency_ms": "fast"}
+    }]
+    res = validate_and_normalize_events(events)
+    assert len(res.accepted) == 1
+    assert len(res.partially_usable) == 1
+    assert "latency_ms" not in res.accepted[0].attributes
+
+
+def test_invalid_attributes_type_rejected():
+    events = [{
+        "timestamp": "2026-10-18T10:00:12Z",
+        "host_id": "web-01",
+        "service": "web-api",
+        "event_type": "http_request",
+        "attributes": "not-a-mapping"
     }]
     res = validate_and_normalize_events(events)
     assert len(res.rejected) == 1

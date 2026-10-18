@@ -1,38 +1,58 @@
-"""Validation and normalization of structured events."""
+"""Validation and normalization of structured events.
+
+Policy summary
+--------------
+* **Rejected** — the record cannot be salvaged as an event: missing/unparseable
+  ``timestamp``, missing/empty ``host_id`` or ``service``, or a non-mapping
+  ``attributes`` value.
+* **Duplicated** — an ``event_id`` that has already been seen is dropped to avoid
+  double counting. Deduplication only happens when a stable ``event_id`` exists.
+* **Partially usable** — the event is accepted and counted, but one or more
+  optional measurements were invalid and had to be dropped (for example a
+  negative latency or a non-numeric status code). The event is *not* silently
+  discarded and the invalid measurement is *not* coerced to zero.
+* **Accepted** — everything else.
+"""
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
 import logging
 
-from .schemas import StructuredEvent, EventLevel, EventType
+from .schemas import StructuredEvent
 
 logger = logging.getLogger(__name__)
 
+ERROR_LEVELS = {"ERROR", "FATAL", "CRITICAL"}
+
+
 class ValidationResult:
-    def __init__(self):
+    """Container for the outcome of validating a batch of events."""
+
+    def __init__(self) -> None:
         self.accepted: List[StructuredEvent] = []
         self.rejected: List[Dict[str, Any]] = []
         self.duplicated: List[Dict[str, Any]] = []
         self.partially_usable: List[Dict[str, Any]] = []
         self.total_processed = 0
 
+
 def normalize_level(level: Any) -> str:
+    """Normalize a severity string to a small documented vocabulary."""
     if level is None:
         return "INFO"
     level_str = str(level).strip().upper()
-    # Map common variations
     if level_str in ("WARN", "WARNING"):
         return "WARNING"
-    if level_str in ("CRIT", "CRITICAL", "FATAL"):
-        return "ERROR"  # Normalize to common levels
-    if level_str in ("ERR", "ERROR"):
+    if level_str in ("CRIT", "CRITICAL", "FATAL", "ERR", "ERROR"):
         return "ERROR"
     if level_str in ("INFO", "INFORMATION"):
         return "INFO"
     if level_str in ("DEBUG", "TRACE", "VERBOSE"):
         return "DEBUG"
-    return level_str  # Keep as-is but document
+    return level_str or "UNKNOWN"
+
 
 def normalize_event_type(event_type: Any) -> str:
+    """Normalize an event-type string to a documented category."""
     if event_type is None:
         return "other"
     et = str(event_type).strip().lower()
@@ -51,26 +71,27 @@ def normalize_event_type(event_type: Any) -> str:
         "database": "database_query",
         "app": "application_log",
     }
-    return mapping.get(et, et)
+    return mapping.get(event_type_str := et, et)
+
 
 def parse_timestamp(ts: Any) -> Tuple[bool, datetime, str]:
-    """Parse timestamp to UTC. Returns (success, dt_utc, reason)."""
+    """Parse a timestamp and normalize it to UTC.
+
+    Returns ``(success, datetime_utc, reason)``. Naive timestamps are assumed to
+    be UTC; aware timestamps are converted to UTC.
+    """
     if ts is None:
         return False, None, "Missing timestamp"
-    
-    # If already datetime
+
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
-            # Assume UTC if naive
             return True, ts.replace(tzinfo=timezone.utc), ""
-        else:
-            return True, ts.astimezone(timezone.utc), ""
-    
+        return True, ts.astimezone(timezone.utc), ""
+
     ts_str = str(ts).strip()
     if not ts_str:
         return False, None, "Empty timestamp"
-    
-    # Common formats
+
     formats = [
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%dT%H:%M:%S.%fZ",
@@ -81,128 +102,144 @@ def parse_timestamp(ts: Any) -> Tuple[bool, datetime, str]:
         "%Y-%m-%d %H:%M:%S%z",
         "%Y-%m-%dT%H:%M:%S%z",
     ]
-    
     for fmt in formats:
         try:
-            dt = datetime.strptime(ts_str.replace('+00:00', ''), fmt)
-            if fmt.endswith('%z') or 'Z' in ts_str or '+' in ts_str:
-                dt_utc = dt.astimezone(timezone.utc)
-            else:
-                dt_utc = dt.replace(tzinfo=timezone.utc)
-            return True, dt_utc, ""
-        except Exception:
+            dt = datetime.strptime(ts_str, fmt)
+        except ValueError:
             continue
-    
-    # Try fromisoformat
-    try:
-        if 'Z' in ts_str:
-            ts_str_clean = ts_str.replace('Z', '+00:00')
-        dt = datetime.fromisoformat(ts_str_clean) if 'Z' in ts_str else datetime.fromisoformat(ts_str)
-        dt_utc = dt.astimezone(timezone.utc)
-        return True, dt_utc, ""
-    except Exception:
-        pass
-    
-    return False, None, f"Unparseable timestamp format: {ts_str[:50]}"
+        if dt.tzinfo is None:
+            return True, dt.replace(tzinfo=timezone.utc), ""
+        return True, dt.astimezone(timezone.utc), ""
 
-def validate_and_normalize_events(events: List[Dict[str, Any]], 
-                                  strict: bool = True) -> ValidationResult:
-    """Validate and normalize a list of events."""
+    # Fallback to ISO parsing (handles offsets and fractional seconds).
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return True, dt.replace(tzinfo=timezone.utc), ""
+        return True, dt.astimezone(timezone.utc), ""
+    except ValueError:
+        pass
+
+    return False, None, f"Unparseable timestamp: {ts_str[:50]}"
+
+
+def _clean_attributes(attributes: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Drop invalid optional measurements, returning (clean_attrs, warnings)."""
+    warnings: List[str] = []
+    clean: Dict[str, Any] = {}
+
+    for key, value in attributes.items():
+        if key == "latency_ms":
+            try:
+                lat = float(value)
+            except (TypeError, ValueError):
+                warnings.append(f"Dropped non-numeric latency_ms={value!r}")
+                continue
+            if lat < 0:
+                warnings.append(f"Dropped negative latency_ms={lat}")
+                continue
+            clean[key] = lat
+        elif key == "status_code":
+            try:
+                sc = int(value)
+            except (TypeError, ValueError):
+                warnings.append(f"Dropped non-integer status_code={value!r}")
+                continue
+            if sc < 100 or sc > 599:
+                warnings.append(f"Dropped out-of-range status_code={sc}")
+                continue
+            clean[key] = sc
+        else:
+            clean[key] = value
+
+    return clean, warnings
+
+
+def validate_and_normalize_events(events: List[Dict[str, Any]]) -> ValidationResult:
+    """Validate and normalize a list of raw event dictionaries."""
     result = ValidationResult()
     seen_event_ids = set()
-    
+
     for i, ev in enumerate(events):
         result.total_processed += 1
-        reasons = []
-        warnings = []
-        
-        # Copy event
-        ev_norm = dict(ev) if ev else {}
-        
-        # Parse timestamp
+        reasons: List[str] = []
+
+        ev_norm = dict(ev) if isinstance(ev, dict) else {}
+
+        # --- Required: timestamp ---
         ts_ok, ts_dt, ts_reason = parse_timestamp(ev_norm.get("timestamp"))
         if not ts_ok:
             reasons.append(ts_reason)
-        else:
-            ev_norm["timestamp"] = ts_dt
-        
-        # Validate required fields
+
+        # --- Required: host_id ---
         host_id = ev_norm.get("host_id")
         if host_id is None or str(host_id).strip() == "":
             reasons.append("Missing or empty host_id")
-        else:
-            ev_norm["host_id"] = str(host_id).strip()
-        
+
+        # --- Required: service ---
         service = ev_norm.get("service")
         if service is None or str(service).strip() == "":
             reasons.append("Missing or empty service")
-        else:
-            ev_norm["service"] = str(service).strip()
-        
-        # Normalize event_type and level
+
+        # --- Optional/required-normalized fields ---
         ev_norm["event_type"] = normalize_event_type(ev_norm.get("event_type"))
         ev_norm["level"] = normalize_level(ev_norm.get("level"))
-        
-        # Validate attributes
-        attrs = ev_norm.get("attributes", {})
-        if attrs is None:
-            ev_norm["attributes"] = {}
-        elif not isinstance(attrs, dict):
-            reasons.append(f"Invalid attributes type: {type(attrs)}")
-            ev_norm["attributes"] = {}
-        
-        # Check for negative latency
-        latency = ev_norm.get("attributes", {}).get("latency_ms") if ev_norm.get("attributes") else None
-        if latency is not None:
-            try:
-                lat_val = float(latency)
-                if lat_val < 0:
-                    reasons.append(f"Invalid negative latency: {lat_val}")
-            except Exception:
-                reasons.append(f"Invalid latency type: {latency}")
-        
-        # Check status code validity if present
-        status = ev_norm.get("attributes", {}).get("status_code") if ev_norm.get("attributes") else None
-        if status is not None:
-            try:
-                sc = int(status)
-                if sc < 100 or sc > 599:  # HTTP status codes range
-                    warnings.append(f"Unusual status code: {sc}")
-            except Exception:
-                warnings.append(f"Invalid status code type: {status}")
-        
-        event_id = ev_norm.get("event_id")
-        if event_id is not None and str(event_id) in seen_event_ids:
-            result.duplicated.append({
-                "index": i,
-                "event": ev_norm,
-                "reason": "Duplicate event_id"
-            })
-            continue
-        elif event_id is not None:
-            seen_event_ids.add(str(event_id))
-        
+
+        # --- attributes must be a mapping when present ---
+        raw_attrs = ev_norm.get("attributes")
+        if raw_attrs is None:
+            raw_attrs = {}
+        if not isinstance(raw_attrs, dict):
+            reasons.append(f"Invalid attributes type: {type(raw_attrs).__name__}")
+            raw_attrs = {}
+
+        clean_attrs, attr_warnings = _clean_attributes(raw_attrs)
+
+        # Reject unusable records before dedup so counts are explicit.
         if reasons:
             result.rejected.append({
                 "index": i,
                 "event": ev,
                 "normalized": ev_norm,
                 "reasons": reasons,
-                "warnings": warnings
+                "warnings": attr_warnings,
             })
-            if not strict and len(reasons) == 0:  # shouldn't happen
-                pass
-        else:
-            structured = StructuredEvent(
-                event_id=str(event_id) if event_id else f"evt-{i:06d}",
-                timestamp=ev_norm["timestamp"],
-                host_id=ev_norm["host_id"],
-                service=ev_norm["service"],
-                event_type=ev_norm["event_type"],
-                level=ev_norm["level"],
-                attributes=ev_norm.get("attributes", {}),
-                source_metadata=ev_norm.get("source_metadata", {})
-            )
-            result.accepted.append(structured)
-        
+            continue
+
+        # --- Deduplication on stable event_id only ---
+        event_id = ev_norm.get("event_id")
+        if event_id is not None and str(event_id) in seen_event_ids:
+            result.duplicated.append({
+                "index": i,
+                "event_id": str(event_id),
+                "reason": "Duplicate event_id",
+            })
+            continue
+        if event_id is not None:
+            seen_event_ids.add(str(event_id))
+
+        ev_norm["timestamp"] = ts_dt
+        ev_norm["host_id"] = str(host_id).strip()
+        ev_norm["service"] = str(service).strip()
+        ev_norm["attributes"] = clean_attrs
+
+        structured = StructuredEvent(
+            event_id=str(event_id) if event_id is not None else f"evt-{i:06d}",
+            timestamp=ts_dt,
+            host_id=ev_norm["host_id"],
+            service=ev_norm["service"],
+            event_type=ev_norm["event_type"],
+            level=ev_norm["level"],
+            attributes=clean_attrs,
+            source_metadata=ev_norm.get("source_metadata", {}) or {},
+        )
+        result.accepted.append(structured)
+
+        if attr_warnings:
+            result.partially_usable.append({
+                "index": i,
+                "event_id": structured.event_id,
+                "reasons": attr_warnings,
+            })
+
     return result
