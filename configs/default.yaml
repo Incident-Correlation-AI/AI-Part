@@ -1,0 +1,7 @@
+window_size_minutes: 1
+seed: 42
+output_dir: ./data/processed
+synthetic_dir: ./data/synthetic
+report_dir: ./artifacts
+timezone: UTC
+allow_empty_windows: false
