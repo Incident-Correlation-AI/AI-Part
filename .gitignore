@@ -35,6 +35,8 @@ coverage.xml
 .hypothesis/
 .DS_Store
 *.log
+# Keep small intentional test fixtures, even though they may use ignored suffixes.
+!tests/fixtures/**
 data/raw/*
 data/processed/*
 data/synthetic/*
