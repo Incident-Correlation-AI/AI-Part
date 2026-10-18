@@ -1,6 +1,6 @@
 """Data quality reporting."""
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 from .schemas import FeatureWindow, LabelInfo
@@ -11,7 +11,7 @@ def generate_data_quality_report(validation_result: ValidationResult,
                                 labels: List[LabelInfo] = None) -> Dict[str, Any]:
     """Generate comprehensive data quality report."""
     report = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "input": {
             "total_processed": validation_result.total_processed,
             "accepted_count": len(validation_result.accepted),
@@ -22,8 +22,8 @@ def generate_data_quality_report(validation_result: ValidationResult,
         "rejection_reasons": {},
         "windows": {
             "count": len(windows),
-            "hosts": set(w.host_id for w in windows),
-            "services": set(w.service for w in windows)
+            "hosts": sorted(set(w.metadata.host_id for w in windows)),
+            "services": sorted(set(w.metadata.service for w in windows))
         },
         "labels": {
             "count": len(labels) if labels else 0,

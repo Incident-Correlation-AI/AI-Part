@@ -46,3 +46,31 @@ def test_ratio_with_zero_denominator():
     w = windows[0]
     assert w.http_5xx_ratio is None  # No eligible HTTP requests
     assert w.mean_latency_ms is None  # No valid latency samples
+
+def test_auth_failure_and_restart_count():
+    from datetime import datetime, timezone, timedelta
+    from anomaly_detector.schemas import StructuredEvent
+    base = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    events = [
+        StructuredEvent("a1", base, "web-01", "web-api", "auth_failure", "ERROR", {}),
+        StructuredEvent("a2", base.replace(second=10), "web-01", "web-api", "auth_failure", "ERROR", {}),
+        StructuredEvent("r1", base.replace(second=20), "web-01", "web-api", "service_restart", "WARNING", {}),
+    ]
+    windows = aggregate_events_to_windows(events, window_size_minutes=1)
+    assert windows[0].auth_failure_count == 2
+    assert windows[0].restart_count == 1
+
+def test_p95_latency():
+    from datetime import datetime, timezone, timedelta
+    from anomaly_detector.schemas import StructuredEvent
+    base = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    events = []
+    # 100 samples: 1-100ms
+    for i in range(100):
+        events.append(StructuredEvent(f"l{i}", base.replace(second=i % 60), "web-01", "web-api", "http_request", "INFO", {"latency_ms": i + 1}))
+    windows = aggregate_events_to_windows(events, window_size_minutes=1)
+    w = windows[0]
+    assert w.latency_sample_count == 100
+    assert w.mean_latency_ms == 50.5
+    # p95 should be around 95-96
+    assert 90 <= w.p95_latency_ms <= 100
