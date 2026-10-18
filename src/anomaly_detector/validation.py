@@ -36,9 +36,13 @@ class ValidationResult:
 
 
 def normalize_level(level: Any) -> str:
-    """Normalize a severity string to a small documented vocabulary."""
-    if level is None:
-        return "INFO"
+    """Normalize a severity string to a small documented vocabulary.
+
+    A missing severity becomes ``"UNKNOWN"`` rather than ``"INFO"`` so that
+    absence is not silently coerced into a valid-looking value.
+    """
+    if level is None or (isinstance(level, str) and level.strip() == ""):
+        return "UNKNOWN"
     level_str = str(level).strip().upper()
     if level_str in ("WARN", "WARNING"):
         return "WARNING"

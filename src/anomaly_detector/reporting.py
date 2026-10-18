@@ -59,7 +59,8 @@ def _feature_availability(windows: List[FeatureWindow]) -> Dict[str, Dict[str, A
 
 def generate_data_quality_report(validation_result: ValidationResult,
                                  windows: List[FeatureWindow],
-                                 labels: Optional[List[LabelInfo]] = None) -> Dict[str, Any]:
+                                 labels: Optional[List[LabelInfo]] = None,
+                                 raw_events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Generate a comprehensive data-quality report.
 
     Parameters
@@ -70,9 +71,14 @@ def generate_data_quality_report(validation_result: ValidationResult,
         Feature windows produced by the aggregation step.
     labels:
         Optional ground-truth labels (only for labeled synthetic data).
+    raw_events:
+        Optional original raw input events, used to measure *source* missingness
+        before normalization. When omitted, the post-normalization accepted
+        events are used (which are always complete, so missingness is 0).
     """
     labels = labels or []
-    accepted_events = [e.to_dict() for e in validation_result.accepted]
+    if raw_events is None:
+        raw_events = [e.to_dict() for e in validation_result.accepted]
 
     report: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -84,10 +90,7 @@ def generate_data_quality_report(validation_result: ValidationResult,
             "partially_usable_count": len(validation_result.partially_usable),
         },
         "rejection_reasons": {},
-        "missingness_by_field": _missingness_by_field(
-            [e.to_dict() for e in validation_result.accepted]
-            + [r.get("normalized", {}) for r in validation_result.rejected]
-        ),
+        "missingness_by_field": _missingness_by_field(raw_events),
         "windows": {
             "count": len(windows),
             "hosts": sorted({w.metadata.host_id for w in windows}),

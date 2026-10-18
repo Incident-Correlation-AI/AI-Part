@@ -1,7 +1,22 @@
+# Default configuration for the Milestone 1 data pipeline.
+# All paths are relative to the repository root (current working directory),
+# so the project is portable and free of machine-specific paths.
+
+# Time-window size in minutes for host/service aggregation.
 window_size_minutes: 1
-seed: 42
-output_dir: ./data/processed
-synthetic_dir: ./data/synthetic
-report_dir: ./artifacts
-timezone: UTC
+
+# Deterministic random seed for synthetic data generation.
+random_seed: 42
+
+# When true, materialize windows with no observations between the first and
+# last observed window for each host/service. Documented as distinct from
+# absent telemetry.
 allow_empty_windows: false
+
+# Output locations.
+output_dir: data/processed
+synthetic_dir: data/synthetic
+artifacts_dir: artifacts
+
+# Default synthetic scenario duration (hours) where a duration applies.
+scenario_duration_hours: 1

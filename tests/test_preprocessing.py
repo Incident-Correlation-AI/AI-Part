@@ -67,3 +67,48 @@ def test_out_of_order_events():
     windows = aggregate_events_to_windows(events, window_size_minutes=1)
     assert len(windows) >= 1
     assert windows[0].event_count == 3
+
+def test_allow_empty_windows_materializes_gap():
+    base = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    events = [
+        StructuredEvent("e1", base, "web-01", "web-api", "http_request", "INFO", {}),
+        StructuredEvent("e2", base + timedelta(minutes=3), "web-01", "web-api", "http_request", "INFO", {}),
+    ]
+    windows = aggregate_events_to_windows(events, window_size_minutes=1, allow_empty_windows=True)
+    # 4 windows: t0, t1(empty), t2(empty), t3
+    assert len(windows) == 4
+    assert windows[1].event_count == 0
+    assert windows[1].mean_latency_ms is None  # empty != zero
+    assert windows[1].http_5xx_ratio is None
+
+
+def test_default_does_not_materialize_empty_windows():
+    base = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    events = [
+        StructuredEvent("e1", base, "web-01", "web-api", "http_request", "INFO", {}),
+        StructuredEvent("e2", base + timedelta(minutes=3), "web-01", "web-api", "http_request", "INFO", {}),
+    ]
+    windows = aggregate_events_to_windows(events, window_size_minutes=1)
+    assert len(windows) == 2  # only observed windows
+
+
+def test_multi_minute_window_alignment():
+    # 10:00:30 and 10:02:30 with 5-minute windows both fall in [10:00, 10:05).
+    base = datetime(2026, 10, 18, 10, 0, 30, tzinfo=timezone.utc)
+    events = [
+        StructuredEvent("e1", base, "web-01", "web-api", "http_request", "INFO", {}),
+        StructuredEvent("e2", base + timedelta(minutes=2), "web-01", "web-api", "http_request", "INFO", {}),
+    ]
+    windows = aggregate_events_to_windows(events, window_size_minutes=5)
+    assert len(windows) == 1
+    assert windows[0].event_count == 2
+    assert windows[0].metadata.window_start == datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    assert windows[0].metadata.window_end == datetime(2026, 10, 18, 10, 5, 0, tzinfo=timezone.utc)
+
+
+def test_invalid_window_size_raises():
+    base = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    events = [StructuredEvent("e1", base, "web-01", "web-api", "http_request", "INFO", {})]
+    import pytest
+    with pytest.raises(ValueError):
+        aggregate_events_to_windows(events, window_size_minutes=0)

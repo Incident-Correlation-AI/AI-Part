@@ -74,3 +74,37 @@ def test_p95_latency():
     assert w.mean_latency_ms == 50.5
     # p95 should be around 95-96
     assert 90 <= w.p95_latency_ms <= 100
+
+def test_error_eligibility_excludes_unknown_level():
+    from datetime import datetime, timezone
+    from anomaly_detector.preprocessing import create_feature_window
+    from anomaly_detector.schemas import WindowMetadata, StructuredEvent
+    ts = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    meta = WindowMetadata(ts, ts.replace(minute=1), "web-01", "web-api", 1)
+    events = [
+        StructuredEvent("e1", ts, "web-01", "web-api", "http_request", "ERROR", {"status_code": 500}),
+        StructuredEvent("e2", ts, "web-01", "web-api", "http_request", "UNKNOWN", {"status_code": 200}),
+    ]
+    w = create_feature_window(meta, events)
+    # Only the ERROR event has a known severity -> eligible count is 1.
+    assert w.error_eligible_count == 1
+    assert w.error_count == 1
+    assert w.error_ratio == 1.0
+
+
+def test_http_ratio_denominator_requires_status_code():
+    from datetime import datetime, timezone
+    from anomaly_detector.preprocessing import create_feature_window
+    from anomaly_detector.schemas import WindowMetadata, StructuredEvent
+    ts = datetime(2026, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
+    meta = WindowMetadata(ts, ts.replace(minute=1), "web-01", "web-api", 1)
+    events = [
+        StructuredEvent("e1", ts, "web-01", "web-api", "http_request", "INFO", {"status_code": 200}),
+        StructuredEvent("e2", ts, "web-01", "web-api", "http_request", "INFO", {}),  # no status code
+        StructuredEvent("e3", ts, "web-01", "web-api", "http_request", "INFO", {"status_code": 503}),
+    ]
+    w = create_feature_window(meta, events)
+    assert w.http_request_count == 3
+    assert w.http_request_eligible_count == 2  # only those with a status code
+    assert w.http_5xx_count == 1
+    assert w.http_5xx_ratio == 0.5
