@@ -25,3 +25,26 @@ def test_feature_columns_clean():
     forbidden = ["host_id", "service", "window_start", "window_end", "scenario_name", "is_anomaly"]
     for col in feat_df.columns:
         assert col not in forbidden
+
+def test_exported_feature_file_has_no_label_columns(tmp_path):
+    """The exported feature CSV must not contain labels or metadata columns."""
+    from anomaly_detector.pipeline import run_pipeline, export_result
+
+    gen = SyntheticDataGenerator(seed=11)
+    data = gen.generate_full_synthetic_dataset()
+    result = run_pipeline(
+        [e.to_dict() for e in data["events"]],
+        window_size_minutes=1,
+        labels=data["labels"],
+    )
+    paths = export_result(result, str(tmp_path))
+    with open(paths["features"], "r", encoding="utf-8") as fh:
+        header = fh.readline().strip().split(",")
+    forbidden = {"is_anomaly", "scenario_name", "host_id", "service",
+                 "window_start", "window_end", "intensity", "description"}
+    assert forbidden.isdisjoint(set(header))
+    # And the labels file genuinely carries the labels.
+    with open(paths["labels"], "r", encoding="utf-8") as fh:
+        label_header = fh.readline().strip().split(",")
+    assert "is_anomaly" in label_header
+    assert "scenario_name" in label_header

@@ -72,10 +72,11 @@ class LoghubHDFSAdapter(BaseDatasetAdapter):
 
     # ------------------------------------------------------------------ #
     def can_load(self, path: str = None) -> bool:
-        if not path or not os.path.isfile(path):
+        log_path, _ = self._resolve_paths(path)
+        if not log_path or not os.path.isfile(log_path):
             return False
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                 for _ in range(5):
                     line = fh.readline()
                     if not line:
