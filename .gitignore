@@ -41,7 +41,9 @@ data/raw/*
 data/processed/*
 data/synthetic/*
 artifacts/*
+reports/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/synthetic/.gitkeep
 !artifacts/.gitkeep
+!reports/.gitkeep

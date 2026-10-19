@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ml-anomaly-detector"
 version = "0.1.0"
-description = "Data pipeline foundation for ML log anomaly detection (Milestone 1)"
+description = "Data pipeline and experiment-readiness tooling for ML log anomaly detection (Milestones 1-2)"
 authors = [{name = "ML Anomaly Detector Team"}]
 readme = "README.md"
 requires-python = ">=3.9"

@@ -1,13 +1,19 @@
-# ML Anomaly Detector — Milestone 1: Data Pipeline Foundation
+# ML Anomaly Detector — Data Pipeline & Experiment Readiness (Milestones 1–2)
 
-A standalone **data-preparation** component for an Automated Log Anomaly Detector.
-It turns structured log events into trustworthy numerical feature windows that a
-later milestone can feed to anomaly-detection models.
+A standalone **data-preparation and data-readiness** component for an Automated Log
+Anomaly Detector. It turns structured log events into trustworthy numerical feature
+windows (Milestone 1) and then validates that data, audits it for leakage, and
+produces reproducible, aligned, training-ready datasets (Milestone 2).
 
-> **Scope:** Milestone 1 is data preparation only. There is **no** model training,
+> **Scope:** Milestones 1–2 are data work only. There is **no** model training,
 > anomaly scoring, statistical detection, reasoning, correlation, API, dashboard or
-> cloud code here. The next milestone (statistical baseline + Isolation Forest)
-> starts only after this data foundation is tested and documented.
+> cloud code here. A later milestone (statistical baseline + Isolation Forest)
+> starts only after this data foundation is validated, split and documented.
+
+- **Milestone 1** — data pipeline foundation (ingest → validate → window → features
+  → synthetic data → public-dataset adapter path).
+- **Milestone 2** — data validation, leakage audit, dataset splits and experiment
+  readiness ([`docs/DATA_READINESS.md`](docs/DATA_READINESS.md)).
 
 ---
 
@@ -26,6 +32,15 @@ later milestone can feed to anomaly-detection models.
 - Provide a **public-dataset adapter path** (interface + one implemented adapter +
   offline fixture tests).
 - Provide **offline unit tests** and reproducible commands.
+- **(M2)** Profile every dataset column and validate it against an explicit policy,
+  **never mutating** the source data.
+- **(M2)** Run a **leakage audit** that classifies every column (feature / label /
+  identifier / timestamp / scenario / future-derived) and refuses to export when a
+  forbidden column reaches the feature matrix.
+- **(M2)** Produce **reproducible random, time-aware and group-aware splits** with
+  integrity checks (coverage, no overlap, chronological order, group disjointness).
+- **(M2)** Export an **aligned training-ready dataset** (features / labels / metadata
+  as separate tables) with a manifest, checksums and alignment verification.
 
 **Does not (belongs to a later milestone or teammate)**
 
@@ -69,6 +84,18 @@ raw events (dicts / JSON)
 | `scripts/run_pipeline.py` | Run the pipeline on an existing raw-events JSON file. |
 | `scripts/prepare_dataset.py` | Convert a public dataset via an adapter (never downloads). |
 | `docs/DATASETS.md` | Candidate-dataset decision, mapping, limitations, blocker. |
+| `src/anomaly_detector/readiness_config.py` | **M2** validated readiness config loader. |
+| `src/anomaly_detector/roles.py` | **M2** feature-role classification + leakage-risk detection. |
+| `src/anomaly_detector/dataset.py` | **M2** table loading + stable sample-key alignment. |
+| `src/anomaly_detector/audit.py` | **M2** read-only dataset audit (JSON + Markdown). |
+| `src/anomaly_detector/leakage.py` | **M2** leakage audit + `assert_no_leakage` guard. |
+| `src/anomaly_detector/splits.py` | **M2** random / time / group splits with checks. |
+| `src/anomaly_detector/training_ready.py` | **M2** aligned training-ready export + manifest. |
+| `scripts/audit_dataset.py` | **M2** run the quality + leakage audit. |
+| `scripts/export_training_ready.py` | **M2** export the training-ready dataset. |
+| `scripts/make_splits.py` | **M2** create reproducible splits. |
+| `scripts/prepare_experiments.py` | **M2** one-shot audit + export + splits. |
+| `docs/DATA_READINESS.md` | **M2** data-readiness concepts, config and commands. |
 
 ---
 
@@ -187,6 +214,17 @@ python scripts/prepare_dataset.py --dataset loghub_hdfs --path tests/fixtures/hd
 
 # (5) Run all tests (offline)
 pytest tests/ -v
+
+# --- Milestone 2: experiment readiness -------------------------------------
+# (6) One-shot: quality + leakage audit, training-ready export, all splits
+python scripts/prepare_experiments.py
+
+#    ...or run each step individually:
+python scripts/audit_dataset.py                       # reports/data_quality_report.{json,md} + leakage_audit.{json,md}
+python scripts/export_training_ready.py               # data/processed/training_ready/
+python scripts/make_splits.py --strategy random
+python scripts/make_splits.py --strategy time
+python scripts/make_splits.py --strategy group --group-column scenario_name
 ```
 
 Outputs:
@@ -198,11 +236,16 @@ Outputs:
 | `data/processed/features.csv` | Numerical feature matrix |
 | `data/processed/metadata.csv` | Window metadata (host, service, time) |
 | `data/processed/labels.csv` | Ground-truth labels |
-| `artifacts/data_quality_report.json` | Data-quality report |
+| `artifacts/data_quality_report.json` | Data-quality report (Milestone 1) |
 | `artifacts/dataset_adapter_status.json` | Adapter decision/status |
+| `reports/data_quality_report.{json,md}` | **M2** dataset audit |
+| `reports/leakage_audit.{json,md}` | **M2** leakage audit |
+| `data/processed/training_ready/` | **M2** aligned features/labels/metadata + `manifest.json` |
+| `data/processed/splits/<strategy>/` | **M2** per-split tables + `split_manifest.json` |
 
 Configuration defaults live in `configs/default.yaml` (window size, seed, output
-paths, empty-window behaviour). All paths are relative to the repo root.
+paths, empty-window behaviour) and `configs/data_readiness.yaml` (Milestone 2 roles,
+policy, splits and export paths). All paths are relative to the repo root.
 
 ---
 
@@ -234,6 +277,33 @@ documented candidate-dataset decision instead.
 
 ---
 
+## 8b. Milestone 2 — data validation, leakage audit, splits, readiness
+
+Full details live in [`docs/DATA_READINESS.md`](docs/DATA_READINESS.md). Summary:
+
+- **Dataset audit** (`reports/data_quality_report.{json,md}`) — per-column profile
+  (dtype, missingness, infinities, cardinality, constant/near-constant), duplicate
+  rows, duplicate sample keys, and policy checks (non-negative counts, unit-interval
+  ratios, integer counts). **Read-only** — the source tables are never mutated.
+- **Leakage audit** (`reports/leakage_audit.{json,md}`) — classifies every column by
+  role and *fails* if a label, identifier, timestamp, scenario or future-derived
+  column reaches the feature matrix. Eligibility is decided by an **explicit
+  allowlist**, never by "is it numeric".
+- **Training-ready export** (`data/processed/training_ready/`) — separate
+  `features.csv` / `labels.csv` / `metadata.csv` + `sample_index.csv` + `manifest.json`
+  (seed, sizes, feature list, leakage status, SHA-256 checksums). Row alignment is
+  verified and a mismatch fails loudly.
+- **Reproducible splits** (`data/processed/splits/<strategy>/`) — `random`, `time`
+  and `group` strategies. Same config + seed ⇒ identical assignment. Integrity
+  checks (coverage, no double assignment, chronological order, group disjointness)
+  are recorded; single-class or empty splits are warned about.
+
+Key policy decisions: **missing ≠ zero** and missing values are *reported, never
+imputed*; nothing is silently dropped or coerced; the label table is never used as
+model input.
+
+---
+
 ## 9. Tests
 
 ```bash
@@ -245,7 +315,10 @@ Coverage includes: valid/invalid events, timezone normalization, missing require
 fields, invalid numeric measurements, duplicates, out-of-order events, window
 boundaries, empty/low-volume windows, zero-denominator ratios, reproducible
 synthetic generation, required scenarios, label leakage, output-schema stability,
-data-quality report counts, and the dataset-adapter interface.
+data-quality report counts, and the dataset-adapter interface. Milestone 2 adds
+coverage for role classification, alignment, the audit (including injected errors),
+the leakage audit (including injected label/identifier columns), split
+reproducibility and integrity, and the training-ready export contract.
 
 ---
 
@@ -254,12 +327,15 @@ data-quality report counts, and the dataset-adapter interface.
 ```text
 ml-anomaly-detector/
 ├── README.md
+├── MILESTONE_1_REPORT.md
+├── MILESTONE_2_REPORT.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/default.yaml
-├── docs/DATASETS.md
+├── configs/{default.yaml, data_readiness.yaml}
+├── docs/{DATASETS.md, DATA_READINESS.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
+├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
 │   ├── __init__.py
 │   ├── schemas.py
@@ -270,8 +346,22 @@ ml-anomaly-detector/
 │   ├── reporting.py
 │   ├── pipeline.py
 │   ├── config.py
+│   ├── readiness_config.py        # M2
+│   ├── roles.py                   # M2
+│   ├── dataset.py                 # M2
+│   ├── audit.py                   # M2
+│   ├── leakage.py                 # M2
+│   ├── splits.py                  # M2
+│   ├── training_ready.py          # M2
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
-├── scripts/{generate_synthetic_data.py, run_pipeline.py, prepare_dataset.py}
+├── scripts/
+│   ├── generate_synthetic_data.py
+│   ├── run_pipeline.py
+│   ├── prepare_dataset.py
+│   ├── audit_dataset.py           # M2
+│   ├── export_training_ready.py   # M2
+│   ├── make_splits.py             # M2
+│   └── prepare_experiments.py     # M2
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -290,7 +380,13 @@ ml-anomaly-detector/
 
 ## 12. Boundary with the next milestone
 
-Milestone 1 stops here with a tested, documented data pipeline. The next milestone
-establishes a statistical baseline and trains/evaluates Isolation Forest on these
-validated feature windows. Do not start it until this data and its tests are
-trustworthy.
+Milestones 1–2 stop here with a tested, documented data pipeline and a leakage-
+audited, reproducible, training-ready dataset (features / labels / metadata kept
+separate, splits produced under three strategies). The next milestone establishes a
+statistical baseline and trains/evaluates Isolation Forest on these validated
+feature windows. Do not start it until this data and its tests are trustworthy.
+
+**Note for the next milestone:** the synthetic data is generated per-window; group
+splits by `scenario_name` can place all anomalies in one fold (the tooling warns but
+does not hide this). Choose the split strategy deliberately and consider a
+scenario-mixed or time-based split for detection experiments.
