@@ -252,8 +252,15 @@ def make_splits(
             idx = result.assignments[name]
             if not idx:
                 continue
-            positives = int((labels[config.label_column].iloc[idx] == True).sum())  # noqa: E712
+            col = labels[config.label_column]
+            positives = int((col.iloc[idx] == True).sum())   # noqa: E712
+            negatives = int((col.iloc[idx] == False).sum())  # noqa: E712
             ratio = positives / len(idx)
             result.checks.append(f"{name}: {positives}/{len(idx)} positive ({ratio:.1%})")
+            if (positives + negatives) > 0 and (positives == 0 or negatives == 0):
+                result.warnings.append(
+                    f"split {name!r} has a single label class "
+                    f"(positives={positives}, negatives={negatives}); evaluation may be degenerate"
+                )
 
     return result
