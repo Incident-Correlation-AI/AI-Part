@@ -1,0 +1,160 @@
+# Milestone 2 — data-readiness configuration.
+#
+# This file drives the audit, leakage audit, dataset splits and training-ready
+# export. Every value here is explicit so behaviour is configurable and testable.
+# Paths are relative to the repository root (the documented working directory).
+
+feature_roles:
+  # Per-column exact role overrides. Highest priority (checked before patterns).
+  # Example: { "window_size_minutes": "identifier" }
+  explicit: {}
+
+  # Ordered role rules. The FIRST matching rule wins as the primary role; all
+  # matches are still recorded so ambiguity can be reported. Matching is a
+  # case-insensitive substring test against the column name.
+  patterns:
+    - role: label
+      match:
+        - is_anomaly
+        - scenario_name
+        - scenario_id
+        - scenario
+        - attack_type
+        - ground_truth
+        - true_label
+        - label
+        - intensity
+        - description
+    - role: timestamp
+      match:
+        - window_start
+        - window_end
+        - timestamp
+        - time_
+        - _time
+    - role: identifier
+      match:
+        - host_id
+        - service
+        - event_id
+        - sample_key
+        - block_id
+        - window_id
+        - window_size_minutes
+    - role: future_derived
+      match:
+        - future
+        - next_
+        - _next
+        - lead_
+        - ahead_
+        - lookahead
+    - role: feature
+      match:
+        - count
+        - ratio
+        - mean_
+        - median_
+        - std_
+        - p95_
+        - _ms
+        - _pct
+        - sample_count
+        - eligible_count
+
+  # Explicit allowlist of model-eligible features. Only these columns may enter
+  # the model feature matrix. A column that is in the allowlist but also matches
+  # a non-feature role is a leakage violation (reported, never silently dropped).
+  eligible_features:
+    - event_count
+    - error_count
+    - error_ratio
+    - http_request_count
+    - http_5xx_count
+    - http_5xx_ratio
+    - auth_failure_count
+    - restart_count
+    - mean_latency_ms
+    - p95_latency_ms
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+
+  # What to do when a column's role cannot be determined: error | warn | exclude.
+  # "error" fails the audit so a human must make an explicit decision.
+  unknown_role_policy: error
+
+data_policy:
+  # Columns that must never be negative.
+  non_negative_columns:
+    - event_count
+    - error_count
+    - http_request_count
+    - http_5xx_count
+    - auth_failure_count
+    - restart_count
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+    - mean_latency_ms
+    - p95_latency_ms
+
+  # Columns that must lie within the closed interval [0, 1].
+  unit_interval_columns:
+    - error_ratio
+    - http_5xx_ratio
+
+  # Column-role metadata: pure counts (integers expected).
+  integer_columns:
+    - event_count
+    - error_count
+    - http_request_count
+    - http_5xx_count
+    - auth_failure_count
+    - restart_count
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+
+  # A feature is "constant" at or below this many distinct values.
+  constant_max_unique: 1
+  # A feature is "near-constant" when its most frequent value covers at least
+  # this fraction of non-missing rows.
+  near_constant_ratio: 0.99
+
+  # Missing values are NEVER imputed with zero and NEVER silently dropped.
+  # "report" only reports them; exclusions must be explicit and auditable.
+  missing_value_action: report
+
+  # Columns that act as the stable sample key when present (in priority order).
+  sample_key_columns:
+    - host_id
+    - service
+    - window_start
+
+  # Optional lists used only for reporting/distribution, never as features.
+  group_columns:
+    - host_id
+    - service
+    - scenario_name
+
+split:
+  # random | time | group
+  strategy: random
+  seed: 42
+  # Ratios must sum to 1.0 (validated).
+  ratios:
+    train: 0.6
+    validation: 0.2
+    test: 0.2
+  # Group-aware split column (used when strategy == group).
+  group_column: scenario_name
+  # Time-aware split column (used when strategy == time).
+  time_column: window_start
+  # Ground-truth column used for label-proportion reporting only.
+  label_column: is_anomaly
+
+paths:
+  reports_dir: reports
+  splits_dir: data/processed/splits
+  training_ready_dir: data/processed/training_ready
