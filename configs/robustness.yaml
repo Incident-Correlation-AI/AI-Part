@@ -1,0 +1,76 @@
+# Milestone 5 — Robustness, Drift, and Realistic Validation
+
+experiment:
+  name: m5_robustness_validation
+  selected_model: m3_isolation_forest_reference
+  selected_model_source: artifacts/baseline/model/manifest.json
+  notes: "Validate selected M3 IF baseline; do not tune on test."
+
+seeds:
+  global: 12345
+  numpy: 12345
+
+splits:
+  strategy: random
+  train: train
+  validation: validation
+  test: test
+  splits_dir: data/processed/splits
+
+feature_contract:
+  allowlist:
+    - event_count
+    - error_count
+    - error_ratio
+    - http_request_count
+    - http_5xx_count
+    - http_5xx_ratio
+    - auth_failure_count
+    - restart_count
+    - mean_latency_ms
+    - p95_latency_ms
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+  exclude:
+    - is_anomaly
+    - scenario_name
+    - description
+    - intensity
+    - host_id
+    - service
+    - sample_key
+    - window_start
+    - window_end
+    - split
+
+policies:
+  missing_value: median_impute  # fitted on training only
+  non_finite: reject
+  training_data: normal_only
+  empty_windows: documented
+  duplicates: dedup_by_event_id_when_present
+
+scenarios:
+  normal_variation:
+    enabled: true
+    count: 40
+  service_anomalies:
+    enabled: true
+    count: 30
+  telemetry_faults:
+    enabled: true
+    count: 40
+  low_volume_boundaries:
+    enabled: true
+    count: 25
+  distribution_shifts:
+    enabled: true
+    count: 25
+
+threshold:
+  use_selected_policy: true  # do not re-optimize per scenario
+  method: validation_f1
+
+outputs:
+  root: artifacts/robustness
