@@ -1,0 +1,124 @@
+# Milestone 4 — Model comparison and improvement configuration
+#
+# Pre-declared selection criteria. These are fixed BEFORE inspecting test metrics.
+# Test labels are NEVER used for feature selection, parameter tuning, threshold
+# selection, or choosing the winner.
+
+experiment:
+  name: m4_model_comparison
+  description: "Compare M3 Isolation Forest against a robust MAD baseline and one alternative (LOF novelty)."
+  run_timestamp_utc: null  # filled by the runner
+  baseline_reference:
+    manifest: artifacts/baseline/model/manifest.json
+    predictions_dir: artifacts/baseline
+    config: configs/baseline.yaml
+
+selection_criteria:
+  primary_objective: "maximize test performance while controlling false alerts"
+  weights:
+    f1: 0.25
+    precision: 0.25
+    recall: 0.15
+    false_positive_rate: 0.20  # minimize
+    pr_auc: 0.10
+  rule: "Pre-declare criteria; validate on validation split; evaluate test once after selection is fixed. If no candidate clearly outperforms baseline, retain M3 Isolation Forest."
+  tie_break: "Prefer simpler/more interpretable model with lower compute cost and fewer failure modes."
+
+data:
+  splits_dir: data/processed/splits
+  strategy: random
+  train: train
+  validation: validation
+  test: test
+  feature_columns:  # must match M3 allowlist / use M3 manifest if available
+    - event_count
+    - error_count
+    - error_ratio
+    - http_request_count
+    - http_5xx_count
+    - http_5xx_ratio
+    - auth_failure_count
+    - restart_count
+    - mean_latency_ms
+    - p95_latency_ms
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+  label_column: is_anomaly
+  sample_key_column: sample_key
+  metadata_columns:
+    - window_start
+    - window_end
+    - host_id
+    - service
+    - window_size_minutes
+  missing_value_policy: median_impute
+  training_data_policy: normal_only
+  non_finite_policy: reject
+
+candidates:
+  A:
+    name: m3_isolation_forest_reference
+    type: isolation_forest
+    enabled: true
+    config:
+      n_estimators: 100
+      max_samples: 256
+      contamination: auto
+      random_state: 42
+      n_jobs: 2
+      bootstrap: false
+    variants:
+      - {n_estimators: 100}
+      - {n_estimators: 200}
+    note: "Keep M3 unchanged as reference. Only a few meaningful configs."
+  B:
+    name: robust_mad_baseline
+    type: mad
+    enabled: true
+    config:
+      agg: max_abs  # max_abs | mean_abs | sum_abs
+      eps: 1e-12
+      # constant/near-constant features handled explicitly
+    note: "Transparent statistical baseline; fit on training only."
+  C:
+    name: lof_novelty
+    type: lof
+    enabled: true
+    config:
+      n_neighbors: 20
+      novelty: true
+      metric: minkowski
+      p: 2
+      contamination: auto
+    note: "One lightweight alternative in novelty mode to score unseen val/test. Skip if unsuitable/costly."
+
+threshold:
+  method: validation_f1  # same objective for all candidates if labels exist
+  min_precision: 0.5
+  min_recall: 0.5
+  fallback_method: train_quantile
+  fallback_quantile: 0.01
+
+evaluation:
+  require_validation_labels: true
+  use_test_only_after_selection: true
+  label_synthetic_results: true
+  report_training_performance_separately: true
+  compute_alert_rate_per_host_hour: true
+  skip_detection_delay_with_reason: true
+
+runtime_limits:
+  max_seconds_per_candidate: 300
+  max_memory_mb: 1024
+  prefer_cpu_only: true
+
+seeds:
+  global: 42
+  numpy: 42
+  sklearn: 42
+  pythonhashseed: 42
+
+outputs:
+  root: artifacts/comparison
+  run_id: null  # set at runtime (timestamp + short hash)
