@@ -1,19 +1,23 @@
-# ML Anomaly Detector — Data Pipeline & Experiment Readiness (Milestones 1–2)
+# ML Anomaly Detector — Data Pipeline, Experiment Readiness & Baseline (Milestones 1–3)
 
-A standalone **data-preparation and data-readiness** component for an Automated Log
-Anomaly Detector. It turns structured log events into trustworthy numerical feature
-windows (Milestone 1) and then validates that data, audits it for leakage, and
-produces reproducible, aligned, training-ready datasets (Milestone 2).
+A standalone **data-preparation and baseline-detection** component for an Automated
+Log Anomaly Detector. It turns structured log events into trustworthy numerical feature
+windows (Milestone 1), validates that data, audits it for leakage and produces
+reproducible, aligned, training-ready datasets (Milestone 2), and then trains, scores
+and evaluates a first **Isolation Forest** baseline over those validated windows
+(Milestone 3).
 
-> **Scope:** Milestones 1–2 are data work only. There is **no** model training,
-> anomaly scoring, statistical detection, reasoning, correlation, API, dashboard or
-> cloud code here. A later milestone (statistical baseline + Isolation Forest)
-> starts only after this data foundation is validated, split and documented.
+> **Scope:** Milestones 1–3 cover data work and **detection/scoring only**. There is
+> **no** evidence correlation, root-cause reasoning, incident narrative, API,
+> dashboard or cloud code here. A flagged window is a lead for investigation, not
+> proof of an attack — that reasoning layer belongs to a separate workstream.
 
 - **Milestone 1** — data pipeline foundation (ingest → validate → window → features
   → synthetic data → public-dataset adapter path).
 - **Milestone 2** — data validation, leakage audit, dataset splits and experiment
   readiness ([`docs/DATA_READINESS.md`](docs/DATA_READINESS.md)).
+- **Milestone 3** — first baseline detector: Isolation Forest, thresholding,
+  evaluation and artifacts ([`docs/BASELINE.md`](docs/BASELINE.md)).
 
 ---
 
@@ -41,10 +45,20 @@ produces reproducible, aligned, training-ready datasets (Milestone 2).
   integrity checks (coverage, no overlap, chronological order, group disjointness).
 - **(M2)** Export an **aligned training-ready dataset** (features / labels / metadata
   as separate tables) with a manifest, checksums and alignment verification.
+- **(M3)** Train and persist an **Isolation Forest baseline** over those validated
+  windows, with an explicit model-input contract (allowlist only), a documented
+  missing-value policy, a train/validation/test discipline and a reproducible
+  threshold.
+- **(M3)** Produce a **continuous anomaly score** plus a boolean flag per sample, and
+  evaluate it **per split** with precision/recall/F1, ROC-AUC, PR-AUC, false-positive
+  cost and alert rate — skipping any metric that cannot be computed, with a reason.
+- **(M3)** Write a **model manifest** (library version, seed, feature schema, data
+  policy, split provenance, score direction, threshold method) so any run can be
+  audited and reproduced.
 
 **Does not (belongs to a later milestone or teammate)**
 
-- No Isolation Forest, clustering, statistical scoring, model training or inference.
+- No statistical baseline comparison, no hyperparameter search, no model comparison.
 - No evidence correlation, incident reasoning, root-cause hypotheses, or explanations.
 - No API, web server, dashboard, cloud SDK, external LLM, or AWS code.
 
@@ -67,6 +81,17 @@ raw events (dicts / JSON)
         │                   └─ metadata.csv (host/service/time)  ← traceability
         ▼
  synthetic_data.py  labels.json / labels.csv  ← ground truth, kept separate
+        │
+        ▼  M2
+ audit.py / leakage.py / splits.py / training_ready.py
+        │              ──► data/processed/splits/<strategy>/{train,validation,test}/
+        ▼
+ baseline_model.py  IsolationForest  ──► raw_score (lower = more anomalous)
+        │              thresholding.py ──► is_anomaly
+        ▼
+ evaluation.py      per-split metrics  ──► reports/metrics.{json,md}
+        ▼
+ artifacts.py       model.joblib + manifest.json + predictions_<split>.csv
 ```
 
 | Module | Responsibility |
@@ -96,6 +121,15 @@ raw events (dicts / JSON)
 | `scripts/make_splits.py` | **M2** create reproducible splits. |
 | `scripts/prepare_experiments.py` | **M2** one-shot audit + export + splits. |
 | `docs/DATA_READINESS.md` | **M2** data-readiness concepts, config and commands. |
+| `src/anomaly_detector/baseline_config.py` | **M3** validated baseline config loader (allowlist, policies, paths). |
+| `src/anomaly_detector/model_contract.py` | **M3** model-input contract: schema, missing-value policy, non-finite rejection. |
+| `src/anomaly_detector/baseline_model.py` | **M3** Isolation Forest wrapper: fit/score/save/load with an explicit contract. |
+| `src/anomaly_detector/thresholding.py` | **M3** threshold selection (validation-F1 / precision / recall / quantile) + fallback. |
+| `src/anomaly_detector/evaluation.py` | **M3** per-split metrics with explicit skip reasons + reference baselines. |
+| `src/anomaly_detector/artifacts.py` | **M3** manifest, predictions, metrics and experiment-note writers. |
+| `src/anomaly_detector/baseline_pipeline.py` | **M3** end-to-end wiring: train → threshold → score → evaluate → artifacts. |
+| `scripts/run_baseline.py` | **M3** CLI: `run` / `train` / `score` / `evaluate`. |
+| `docs/BASELINE.md` | **M3** baseline concepts, contract, commands and limitations. |
 
 ---
 
@@ -225,6 +259,15 @@ python scripts/export_training_ready.py               # data/processed/training_
 python scripts/make_splits.py --strategy random
 python scripts/make_splits.py --strategy time
 python scripts/make_splits.py --strategy group --group-column scenario_name
+
+# --- Milestone 3: baseline detector ----------------------------------------
+# (7) One-shot: train → score every split → evaluate → write all artifacts
+python scripts/run_baseline.py run
+
+#    ...or run each step individually:
+python scripts/run_baseline.py train                  # artifacts/baseline/model/{model.joblib,manifest.json}
+python scripts/run_baseline.py score --split test     # artifacts/baseline/predictions_test.csv
+python scripts/run_baseline.py evaluate --split test   # artifacts/baseline/reports/metrics.{json,md}
 ```
 
 Outputs:
@@ -242,10 +285,17 @@ Outputs:
 | `reports/leakage_audit.{json,md}` | **M2** leakage audit |
 | `data/processed/training_ready/` | **M2** aligned features/labels/metadata + `manifest.json` |
 | `data/processed/splits/<strategy>/` | **M2** per-split tables + `split_manifest.json` |
+| `artifacts/baseline/model/model.joblib` | **M3** fitted Isolation Forest + its input contract |
+| `artifacts/baseline/model/manifest.json` | **M3** model manifest (version, seed, schema, policy, threshold) |
+| `artifacts/baseline/predictions_<split>.csv` | **M3** per-sample score, threshold and flag |
+| `artifacts/baseline/reports/metrics.{json,md}` | **M3** per-split evaluation |
+| `artifacts/baseline/experiment_note.md` | **M3** limitations + reproduction commands |
 
 Configuration defaults live in `configs/default.yaml` (window size, seed, output
-paths, empty-window behaviour) and `configs/data_readiness.yaml` (Milestone 2 roles,
-policy, splits and export paths). All paths are relative to the repo root.
+paths, empty-window behaviour), `configs/data_readiness.yaml` (Milestone 2 roles,
+policy, splits and export paths) and `configs/baseline.yaml` (Milestone 3 model
+parameters, feature allowlist, data policies, threshold rule and paths). All paths
+are relative to the repo root.
 
 ---
 
@@ -304,6 +354,32 @@ model input.
 
 ---
 
+## 8c. Milestone 3 — the Isolation Forest baseline
+
+Full details live in [`docs/BASELINE.md`](docs/BASELINE.md). Summary:
+
+- **Model-input contract** — only the columns on the explicit allowlist in
+  `configs/baseline.yaml` ever reach the estimator. Labels, identifiers, timestamps
+  and scenario metadata are rejected at config-load time.
+- **Missing-value policy** — `median_impute` (default) uses the **training-split
+  median**, fitted on training rows only; `drop` excludes samples under a documented
+  rule and reports them; `error` fails loudly. Missing is **never** zero-filled, and
+  infinities are always rejected.
+- **Training discipline** — the estimator is fitted on training rows only
+  (`normal_only` by default); the threshold is selected on the **validation** split
+  only; the **test** split is refused as a threshold source.
+- **Score contract** — `raw_score = IsolationForest.score_samples`, **lower = more
+  anomalous**, `is_anomaly = raw_score <= threshold` (inclusive). It is a ranking
+  statistic, not a probability.
+- **Evaluation** — precision / recall / F1 / ROC-AUC / PR-AUC / false-positive cost /
+  alert rate **per split**, with a stated reason for every skipped metric and trivial
+  reference baselines (`no_alert`, `train_quantile`) for context.
+- **Artifacts** — `model.joblib` (with its contract), `manifest.json`,
+  `predictions_<split>.csv`, `metrics.{json,md}` and an `experiment_note.md` with the
+  limitations and the exact reproduction commands.
+
+---
+
 ## 9. Tests
 
 ```bash
@@ -318,7 +394,12 @@ synthetic generation, required scenarios, label leakage, output-schema stability
 data-quality report counts, and the dataset-adapter interface. Milestone 2 adds
 coverage for role classification, alignment, the audit (including injected errors),
 the leakage audit (including injected label/identifier columns), split
-reproducibility and integrity, and the training-ready export contract.
+reproducibility and integrity, and the training-ready export contract. Milestone 3
+adds coverage for the config guardrails, the schema/missing-value/non-finite
+contract, the score direction and threshold boundary, the test-split refusal, the
+documented fallback, metric edge cases (single-class splits, missing labels), the
+train/validation/test discipline (poisoning the test split changes nothing) and the
+CLI error paths.
 
 ---
 
@@ -329,11 +410,12 @@ ml-anomaly-detector/
 ├── README.md
 ├── MILESTONE_1_REPORT.md
 ├── MILESTONE_2_REPORT.md
+├── MILESTONE_3_REPORT.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/{default.yaml, data_readiness.yaml}
-├── docs/{DATASETS.md, DATA_READINESS.md}
+├── configs/{default.yaml, data_readiness.yaml, baseline.yaml}
+├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -353,6 +435,13 @@ ml-anomaly-detector/
 │   ├── leakage.py                 # M2
 │   ├── splits.py                  # M2
 │   ├── training_ready.py          # M2
+│   ├── baseline_config.py         # M3
+│   ├── model_contract.py          # M3
+│   ├── baseline_model.py          # M3
+│   ├── thresholding.py            # M3
+│   ├── evaluation.py              # M3
+│   ├── artifacts.py               # M3
+│   ├── baseline_pipeline.py       # M3
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -361,7 +450,8 @@ ml-anomaly-detector/
 │   ├── audit_dataset.py           # M2
 │   ├── export_training_ready.py   # M2
 │   ├── make_splits.py             # M2
-│   └── prepare_experiments.py     # M2
+│   ├── prepare_experiments.py     # M2
+│   └── run_baseline.py            # M3
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -377,16 +467,25 @@ ml-anomaly-detector/
 - Loghub HDFS labels are block-level (instance-level), not window-level; projecting
   them onto windows is deferred and carries a temporal-leakage risk.
 - The feature set is intentionally modest for this milestone.
+- No hyperparameter search or model comparison yet; the Isolation Forest parameters
+  are fixed configuration values.
+- The anomaly score is a ranking statistic, **not** a probability.
+- Detection delay is not measured — the label contract has no anomaly onset time.
+- `model.joblib` is pickle-based; load it only from a trusted source.
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–2 stop here with a tested, documented data pipeline and a leakage-
-audited, reproducible, training-ready dataset (features / labels / metadata kept
-separate, splits produced under three strategies). The next milestone establishes a
-statistical baseline and trains/evaluates Isolation Forest on these validated
-feature windows. Do not start it until this data and its tests are trustworthy.
+Milestones 1–3 stop here with a tested, documented data pipeline, a leakage-audited,
+reproducible, training-ready dataset (features / labels / metadata kept separate,
+splits produced under three strategies) and a reproducible baseline detector with a
+stable output contract. The next milestone can add a statistical baseline (e.g.
+robust z-score / EWMA over the same features), hyperparameter search and a model
+comparison — all of which must reuse the *same* contract: the same allowlist, the same
+missing-value policy, the same score direction and the same train/validation/test
+discipline.
 
 **Note for the next milestone:** the synthetic data is generated per-window; group
 splits by `scenario_name` can place all anomalies in one fold (the tooling warns but
 does not hide this). Choose the split strategy deliberately and consider a
-scenario-mixed or time-based split for detection experiments.
+scenario-mixed or time-based split for detection experiments. The `random` strategy is
+the one used for the headline baseline numbers.
