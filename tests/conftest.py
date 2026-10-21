@@ -99,3 +99,82 @@ def tiny_aligned(tiny_frames, readiness_config):
         features, metadata, labels,
         key_columns=readiness_config.data_policy.sample_key_columns,
     )
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3 fixtures
+# ---------------------------------------------------------------------------
+
+BASELINE_FEATURES = ["event_count", "error_count", "error_ratio", "mean_latency_ms"]
+
+
+def _make_baseline_split(n_rows: int, n_anomalies: int, offset: int):
+    """Build a deterministic small split: anomalies have clearly higher counts."""
+    features = pd.DataFrame({
+        "event_count": [10.0 + i % 5 for i in range(n_rows)],
+        "error_count": [0.0] * n_rows,
+        "error_ratio": [0.0] * n_rows,
+        "mean_latency_ms": [50.0 + (i % 3) for i in range(n_rows)],
+    })
+    labels = []
+    for i in range(n_rows):
+        anomalous = i < n_anomalies
+        if anomalous:
+            features.loc[i, "event_count"] = 500.0 + i
+            features.loc[i, "error_count"] = 120.0 + i
+            features.loc[i, "error_ratio"] = 0.6
+            features.loc[i, "mean_latency_ms"] = 900.0 + i
+        labels.append(anomalous)
+    starts = pd.date_range("2026-02-01", periods=n_rows, freq="min", tz="UTC")
+    metadata = pd.DataFrame({
+        "sample_key": [f"h1|svc|{s.isoformat()}" for s in starts],
+        "window_start": [s.isoformat() for s in starts],
+        "window_end": [(s + pd.Timedelta(minutes=1)).isoformat() for s in starts],
+        "host_id": ["h1"] * n_rows,
+        "service": ["svc"] * n_rows,
+        "window_size_minutes": [1] * n_rows,
+    })
+    label_frame = pd.DataFrame({
+        "sample_key": metadata["sample_key"].tolist(),
+        "is_anomaly": labels,
+    })
+    return features, label_frame, metadata
+
+
+def _write_split(root, name, features, labels, metadata):
+    directory = root / name
+    directory.mkdir(parents=True, exist_ok=True)
+    features.to_csv(directory / "features.csv", index=False)
+    labels.to_csv(directory / "labels.csv", index=False)
+    metadata.to_csv(directory / "metadata.csv", index=False)
+
+
+@pytest.fixture
+def baseline_config(tmp_path):
+    """A baseline config pointing at a temporary output directory."""
+    from anomaly_detector.baseline_config import load_baseline_config
+
+    cfg = load_baseline_config(None)
+    cfg.data.feature_columns = list(BASELINE_FEATURES)
+    cfg.data.training_data_policy = "normal_only"
+    cfg.data.missing_value_policy = "median_impute"
+    cfg.data.metadata_columns = ["window_start", "window_end", "host_id", "service"]
+    cfg.model.n_estimators = 20
+    cfg.model.random_state = 42
+    cfg.paths["splits_dir"] = str(tmp_path / "splits")
+    cfg.paths["output_dir"] = str(tmp_path / "out")
+    return cfg
+
+
+@pytest.fixture
+def baseline_splits(tmp_path, baseline_config):
+    """Write deterministic train/validation/test split tables and return the root."""
+    root = tmp_path / "splits" / "random"
+    for name, (n_rows, n_anomalies) in {
+        "train": (30, 5),
+        "validation": (12, 3),
+        "test": (10, 2),
+    }.items():
+        features, labels, metadata = _make_baseline_split(n_rows, n_anomalies, 0)
+        _write_split(root, name, features, labels, metadata)
+    return root
