@@ -1,0 +1,88 @@
+# Milestone 3 — Isolation Forest baseline configuration.
+#
+# Every parameter that influences a result lives here (or in the explicit
+# config object built from this file). Nothing is hard-coded in the model
+# modules. Paths are relative to the repository root.
+
+model:
+  # Conservative defaults for a small local machine (8 GB RAM / 4 threads).
+  n_estimators: 100
+  max_samples: 256          # scikit-learn clamps this to the training size
+  contamination: "auto"     # "auto" or a float in (0, 0.5]
+  random_state: 42
+  n_jobs: 2
+  bootstrap: false
+
+data:
+  # ---------------------------------------------------------------------------
+  # EXPLICIT model-input allowlist.
+  #
+  # Only these columns are ever passed to the estimator. Labels, identifiers,
+  # timestamps, scenario names and split metadata are excluded on purpose:
+  #   is_anomaly / scenario_name / description / intensity  -> ground truth
+  #   host_id / service / sample_key / event_id              -> identifiers
+  #   window_start / window_end / window_size_minutes       -> timestamps
+  # A numeric dtype alone is NOT a reason to include a column.
+  # ---------------------------------------------------------------------------
+  feature_columns:
+    - event_count
+    - error_count
+    - error_ratio
+    - http_request_count
+    - http_5xx_count
+    - http_5xx_ratio
+    - auth_failure_count
+    - restart_count
+    - mean_latency_ms
+    - p95_latency_ms
+    - latency_sample_count
+    - http_request_eligible_count
+    - error_eligible_count
+
+  # Missing values (NaN). Never replaced with zero.
+  #   median_impute -> impute with the TRAINING-split median per column
+  #                     (learned preprocessing, fitted on training data only)
+  #   drop           -> exclude any sample that has a missing value
+  #   error          -> fail loudly
+  missing_value_policy: median_impute
+
+  # Which rows the estimator is fitted on:
+  #   normal_only -> only rows whose label is False (learn "normal" behaviour)
+  #   all         -> every training row
+  training_data_policy: normal_only
+
+  label_column: is_anomaly
+  sample_key_column: sample_key
+  # Columns copied into the predictions file for traceability (never modelled).
+  metadata_columns:
+    - window_start
+    - window_end
+    - host_id
+    - service
+    - window_size_minutes
+
+threshold:
+  # How the raw score becomes an is_anomaly flag.
+  #   validation_f1        -> maximise F1 on the validation split
+  #   validation_precision -> lowest threshold meeting min_precision
+  #   validation_recall    -> highest threshold meeting min_recall
+  #   train_quantile       -> operational heuristic on training scores only
+  method: validation_f1
+  min_precision: 0.5
+  min_recall: 0.5
+  # Fallback when labelled validation data is missing or single-class.
+  fallback_method: train_quantile
+  fallback_quantile: 0.01   # expected anomaly rate on the training scores
+
+split:
+  # Directory under paths.splits_dir holding <split>/{features,labels,metadata}.csv
+  strategy: random
+  train: train
+  validation: validation
+  test: test
+
+paths:
+  splits_dir: data/processed/splits
+  output_dir: artifacts/baseline
+  model_dir: artifacts/baseline/model
+  reports_dir: artifacts/baseline/reports
