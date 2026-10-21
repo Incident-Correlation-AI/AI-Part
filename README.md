@@ -17,6 +17,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - **Milestone 2** — data validation, leakage audit, dataset splits and experiment
   readiness ([`docs/DATA_READINESS.md`](docs/DATA_READINESS.md)).
 - **Milestone 4** — model comparison and improvement: MAD baseline, LOF (novelty) comparison against M3, predeclared criteria, validation-only selection, unique M4 artifacts ([`docs/MODEL_COMPARISON.md`](docs/MODEL_COMPARISON.md), [`MILESTONE_4_REPORT.md`](MILESTONE_4_REPORT.md)).
+- **Milestone 5** — robustness, drift, and realistic validation: scenario testing with selected M3 model (no retraining), false-alert/miss analysis ([`MILESTONE_5_REPORT.md`](MILESTONE_5_REPORT.md)).
 
 ---
 
