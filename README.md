@@ -16,8 +16,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
   → synthetic data → public-dataset adapter path).
 - **Milestone 2** — data validation, leakage audit, dataset splits and experiment
   readiness ([`docs/DATA_READINESS.md`](docs/DATA_READINESS.md)).
-- **Milestone 3** — first baseline detector: Isolation Forest, thresholding,
-  evaluation and artifacts ([`docs/BASELINE.md`](docs/BASELINE.md)).
+- **Milestone 4** — model comparison and improvement: MAD baseline, LOF (novelty) comparison against M3, predeclared criteria, validation-only selection, unique M4 artifacts ([`docs/MODEL_COMPARISON.md`](docs/MODEL_COMPARISON.md), [`MILESTONE_4_REPORT.md`](MILESTONE_4_REPORT.md)).
 
 ---
 
@@ -128,8 +127,12 @@ raw events (dicts / JSON)
 | `src/anomaly_detector/evaluation.py` | **M3** per-split metrics with explicit skip reasons + reference baselines. |
 | `src/anomaly_detector/artifacts.py` | **M3** manifest, predictions, metrics and experiment-note writers. |
 | `src/anomaly_detector/baseline_pipeline.py` | **M3** end-to-end wiring: train → threshold → score → evaluate → artifacts. |
-| `scripts/run_baseline.py` | **M3** CLI: `run` / `train` / `score` / `evaluate`. |
-| `docs/BASELINE.md` | **M3** baseline concepts, contract, commands and limitations. |
+| `src/anomaly_detector/mad_baseline.py` | **M4** Robust MAD baseline (training-fitted). |
+| `src/anomaly_detector/lof_baseline.py` | **M4** LOF novelty baseline (scaler fitted on training only). |
+| `src/anomaly_detector/comparison_config.py` | **M4** Validated comparison config with predeclared criteria. |
+| `src/anomaly_detector/comparison.py` | **M4** Comparison orchestration (validation-only selection). |
+| `scripts/run_comparison.py` | **M4** Run the comparison. |
+| `docs/MODEL_COMPARISON.md` | **M4** Comparison design and usage. |
 
 ---
 
@@ -268,7 +271,35 @@ python scripts/run_baseline.py run
 python scripts/run_baseline.py train                  # artifacts/baseline/model/{model.joblib,manifest.json}
 python scripts/run_baseline.py score --split test     # artifacts/baseline/predictions_test.csv
 python scripts/run_baseline.py evaluate --split test   # artifacts/baseline/reports/metrics.{json,md}
+
+# --- Milestone 4: model comparison ------------------------------------------
+# (8) Compare candidates against M3 with predeclared criteria
+python scripts/run_comparison.py --config configs/comparison.yaml
 ```
+
+Outputs:
+
+| File | Description |
+|---|---|
+| `data/synthetic/synthetic_events.json` | Raw synthetic events |
+| `data/synthetic/synthetic_labels.json` | Ground-truth labels (separate) |
+| `data/processed/features.csv` | Numerical feature matrix |
+| `data/processed/metadata.csv` | Window metadata (host, service, time) |
+| `data/processed/labels.csv` | Ground-truth labels |
+| `artifacts/data_quality_report.json` | Data-quality report (Milestone 1) |
+| `artifacts/dataset_adapter_status.json` | Adapter decision/status |
+| `reports/data_quality_report.{json,md}` | **M2** dataset audit |
+| `reports/leakage_audit.{json,md}` | **M2** leakage audit |
+| `data/processed/training_ready/` | **M2** aligned features/labels/metadata + `manifest.json` |
+| `data/processed/splits/<strategy>/` | **M2** per-split tables + `split_manifest.json` |
+| `artifacts/baseline/model/model.joblib` | **M3** fitted Isolation Forest + its input contract |
+| `artifacts/baseline/model/manifest.json` | **M3** model manifest (version, seed, schema, policy, threshold) |
+| `artifacts/baseline/predictions_<split>.csv` | **M3** per-sample score, threshold and flag |
+| `artifacts/baseline/reports/metrics.{json,md}` | **M3** per-split evaluation |
+| `artifacts/baseline/experiment_note.md` | **M3** limitations + reproduction commands |
+| `artifacts/comparison/run_*/reports/comparison_report.{json,md}` | **M4** comparison with predeclared criteria |
+| `artifacts/comparison/run_*/comparison_manifest.json` | **M4** run metadata |
+| `artifacts/comparison/run_*/predictions/*` | **M4** per-candidate predictions |
 
 Outputs:
 
@@ -293,9 +324,10 @@ Outputs:
 
 Configuration defaults live in `configs/default.yaml` (window size, seed, output
 paths, empty-window behaviour), `configs/data_readiness.yaml` (Milestone 2 roles,
-policy, splits and export paths) and `configs/baseline.yaml` (Milestone 3 model
-parameters, feature allowlist, data policies, threshold rule and paths). All paths
-are relative to the repo root.
+policy, splits and export paths), `configs/baseline.yaml` (Milestone 3 model
+parameters, feature allowlist, data policies, threshold rule and paths) and
+`configs/comparison.yaml` (Milestone 4 predeclared criteria and candidates). All
+paths are relative to the repo root.
 
 ---
 
@@ -411,11 +443,12 @@ ml-anomaly-detector/
 ├── MILESTONE_1_REPORT.md
 ├── MILESTONE_2_REPORT.md
 ├── MILESTONE_3_REPORT.md
+├── MILESTONE_4_REPORT.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/{default.yaml, data_readiness.yaml, baseline.yaml}
-├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md}
+├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml}
+├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -442,6 +475,10 @@ ml-anomaly-detector/
 │   ├── evaluation.py              # M3
 │   ├── artifacts.py               # M3
 │   ├── baseline_pipeline.py       # M3
+│   ├── comparison_config.py       # M4
+│   ├── mad_baseline.py            # M4
+│   ├── lof_baseline.py            # M4
+│   ├── comparison.py              # M4
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -451,7 +488,8 @@ ml-anomaly-detector/
 │   ├── export_training_ready.py   # M2
 │   ├── make_splits.py             # M2
 │   ├── prepare_experiments.py     # M2
-│   └── run_baseline.py            # M3
+│   ├── run_baseline.py            # M3
+│   └── run_comparison.py          # M4
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -475,17 +513,17 @@ ml-anomaly-detector/
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–3 stop here with a tested, documented data pipeline, a leakage-audited,
+Milestones 1–4 stop here with a tested, documented data pipeline, a leakage-audited,
 reproducible, training-ready dataset (features / labels / metadata kept separate,
-splits produced under three strategies) and a reproducible baseline detector with a
-stable output contract. The next milestone can add a statistical baseline (e.g.
-robust z-score / EWMA over the same features), hyperparameter search and a model
-comparison — all of which must reuse the *same* contract: the same allowlist, the same
-missing-value policy, the same score direction and the same train/validation/test
-discipline.
+splits produced under three strategies), a reproducible Isolation Forest baseline,
+and a fair comparison against a robust MAD baseline and LOF (novelty) using predeclared
+criteria and validation-only selection. M3 artifacts are preserved; M4 writes unique
+outputs under `artifacts/comparison/`. Future work must reuse the *same* contract:
+the same allowlist, the same missing-value policy, the same score direction and the
+same train/validation/test discipline. Do not use test labels for tuning or selection.
 
 **Note for the next milestone:** the synthetic data is generated per-window; group
 splits by `scenario_name` can place all anomalies in one fold (the tooling warns but
 does not hide this). Choose the split strategy deliberately and consider a
 scenario-mixed or time-based split for detection experiments. The `random` strategy is
-the one used for the headline baseline numbers.
+the one used for the headline numbers.
