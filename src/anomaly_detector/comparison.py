@@ -42,6 +42,26 @@ class ModelResult:
 def _ensure_dir(p): os.makedirs(p, exist_ok=True); return p
 
 
+def _take_rows(prepared, mask):
+    """Select the rows of a prepared matrix by a mask over the *source* rows.
+
+    The mask is expressed over the source table (one entry per source row).
+    ``prepare_model_input`` may drop rows under the ``drop`` policy, so the
+    mask is re-indexed through ``prepared.row_indices`` instead of being
+    applied positionally.
+    """
+    import numpy as np
+
+    mask = np.asarray(mask, dtype=bool)
+    kept = np.asarray(prepared.row_indices, dtype=int)
+    if len(kept) != len(mask):
+        raise ModelContractError(
+            f"training mask has {len(mask)} entries but the prepared matrix kept "
+            f"{len(kept)} rows; they cannot be aligned"
+        )
+    return prepared.X[mask[kept]]
+
+
 def run_comparison(cfg: ComparisonConfig, out_root: Optional[str] = None) -> Dict[str, Any]:
     out_root = out_root or cfg.outputs.get("root") or "artifacts/comparison"
     _ensure_dir(out_root)
@@ -120,10 +140,18 @@ def run_comparison(cfg: ComparisonConfig, out_root: Optional[str] = None) -> Dic
             bcfg.data.feature_columns = feat_cols
             bcfg.data.missing_value_policy = policy_missing
             bcfg.data.training_data_policy = policy_train
-            # prepare training matrix (fit preprocessing on training only)
+            # Prepare the training matrix (preprocessing fitted on training only)
+            # and apply the SAME training-data policy as candidate A.
+            #
+            # Milestone 7 root-cause fix: this block used to fit on every
+            # training row, including the labelled anomalies, which violated
+            # the declared `training_data_policy: normal_only` and made the
+            # comparison unfair (different training rows per candidate).
             prep_t = prepare_model_input(X_train_raw, feat_cols, medians=None, policy=policy_missing,
                                          sample_key_column=cfg.data.get("sample_key_column"), context="train-mad")
-            Xtr = prep_t.X; fcols = prep_t.feature_columns
+            fcols = prep_t.feature_columns
+            train_mask = select_training_rows(y_train, policy=policy_train, label_column=label_col)
+            Xtr = _take_rows(prep_t, train_mask)
             mad = MADBaseline(fcols, agg=candB.config.get("agg","max_abs"), eps=candB.config.get("eps",1e-12))
             mad.fit(Xtr)
             # score val/test/train using same medians/policy
@@ -151,7 +179,14 @@ def run_comparison(cfg: ComparisonConfig, out_root: Optional[str] = None) -> Dic
             t0 = time.time()
             prep_t = prepare_model_input(X_train_raw, feat_cols, medians=None, policy=policy_missing,
                                          sample_key_column=cfg.data.get("sample_key_column"), context="train-lof")
-            Xtr = prep_t.X; fcols = prep_t.feature_columns
+            fcols = prep_t.feature_columns
+            # Milestone 7 root-cause fix: apply the same `normal_only`
+            # training-data policy as candidate A. Previously LOF was fitted
+            # on every training row, including the 26 labelled anomalies,
+            # while the Isolation Forest baseline saw only the 110 normal
+            # rows — an unfair comparison and a policy violation.
+            train_mask = select_training_rows(y_train, policy=policy_train, label_column=label_col)
+            Xtr = _take_rows(prep_t, train_mask)
             lof = LOFBaseline(fcols, n_neighbors=candC.config.get("n_neighbors",20), contamination=candC.config.get("contamination","auto"))
             lof.fit(Xtr)
             sv = lof.score(prepare_model_input(X_val_raw, feat_cols, medians=prep_t.medians, policy=policy_missing,
@@ -246,23 +281,70 @@ def build_comparison_report(cfg, results, failures, run_dir):
         mt = r.metrics_test; mv = r.metrics_val
         rows.append({
             "candidate": r.name, "type": r.type, "variant": r.variant,
-            "val_precision": mv.get("metrics",{}).get("precision"), "val_recall": mv.get("metrics",{}).get("recall"), "val_f1": mv.get("metrics",{}).get("f1"), "val_pr_auc": mv.get("metrics",{}).get("pr_auc"),
+            "val_precision": mv.get("metrics",{}).get("precision"), "val_recall": mv.get("metrics",{}).get("recall"), "val_f1": mv.get("metrics",{}).get("f1"), "val_pr_auc": mv.get("metrics",{}).get("pr_auc"), "val_false_positive_rate": mv.get("metrics",{}).get("false_positive_rate"),
             "test_precision": mt.get("metrics",{}).get("precision"), "test_recall": mt.get("metrics",{}).get("recall"), "test_f1": mt.get("metrics",{}).get("f1"), "test_pr_auc": mt.get("metrics",{}).get("pr_auc"), "test_roc_auc": mt.get("metrics",{}).get("roc_auc"),
             "test_fp": mt.get("metrics",{}).get("fp"), "test_tp": mt.get("metrics",{}).get("tp"), "test_flagged": mt.get("metrics",{}).get("n_flagged"),
             "threshold": r.threshold, "threshold_method": getattr(r.threshold_result,"method",""),
             "runtime_s": round(r.runtime_s,3), "notes": "; ".join(r.notes)
         })
-    # pick winner by predeclared criteria (simple)
-    best = None; best_key = None
+    # Pick the winner by the PRE-DECLARED criteria, using VALIDATION metrics
+    # only.
+    #
+    # Milestone 7 root-cause fix: this block used to key the winner on the
+    # TEST metrics (test_f1 / test_precision / test_fp / test_recall), which
+    # contradicted the pre-declared rule in configs/comparison.yaml ("evaluate
+    # test once after selection is fixed") and produced
+    # `recommended: lof_novelty` — a decision that contradicted the written
+    # M4 report. Selection now reads validation metrics only, honours the
+    # declared weights, and implements the declared "retain the baseline
+    # unless a candidate clearly outperforms it" rule. Test metrics are
+    # still reported below, as a final evaluation performed after the
+    # selection was locked.
+    best = None
+    best_key = None
+    weights = dict((cfg.selection_criteria or {}).get("weights") or {})
+    baseline_name = "m3_isolation_forest_reference"
     for row in rows:
-        tfp = row.get("test_fp") or 0; tpr = row.get("test_precision") or 0; trc = row.get("test_recall") or 0; tf1 = row.get("test_f1") or 0
-        key = (tf1, tpr, -tfp, trc)  # prefer higher f1/precision, lower fp
-        if best_key is None or key > best_key: best_key = key; best = row
+        f1 = row.get("val_f1")
+        precision = row.get("val_precision")
+        recall = row.get("val_recall")
+        pr_auc = row.get("val_pr_auc")
+        fpr = None
+        if row.get("val_precision") is not None and row.get("val_recall") is not None:
+            fpr = row.get("val_false_positive_rate")
+        parts = []
+        for name, value in (
+            ("f1", f1),
+            ("precision", precision),
+            ("recall", recall),
+            ("pr_auc", pr_auc),
+        ):
+            if value is not None:
+                parts.append(weights.get(name, 0.0) * float(value))
+        if fpr is not None:
+            parts.append(weights.get("false_positive_rate", 0.0) * (1.0 - float(fpr)))
+        score = sum(parts) if parts else 0.0
+        row["validation_weighted_score"] = score
+        # Higher validation score wins. On a tie the incumbent is preferred
+        # (it is the model already in use, and the pre-declared rule says to
+        # retain it unless a candidate clearly outperforms it).
+        key = (score, 1 if row["candidate"] == baseline_name else 0)
+        if best_key is None or key > best_key:
+            best_key = key
+            best = row
+    rationale = (
+        "Selected by the pre-declared criteria using VALIDATION metrics only "
+        "(test metrics are reported separately as a final evaluation performed "
+        "after the selection was locked)."
+        if best else "No candidates succeeded."
+    )
     return {
         "run_dir": run_dir, "generated_at": datetime.now(timezone.utc).isoformat(),
         "predeclared_criteria": cfg.selection_criteria,
         "dataset": {"splits_dir": cfg.data.get("splits_dir"), "strategy": cfg.data.get("strategy"), "feature_columns": feat_cols(cfg)},
-        "comparison_table": rows, "failures": failures, "recommended": best["candidate"] if best else None, "recommendation_rationale": "Selected by predeclared criteria using validation for threshold/selection; test evaluated once after selection fixed. If no clear gain, prefer baseline." if best else "No candidates succeeded.",
+        "comparison_table": rows, "failures": failures, "recommended": best["candidate"] if best else None, "recommendation_rationale": rationale,
+        "selection_evidence_split": "validation",
+        "used_test_metrics_for_selection": False,
     }
 
 

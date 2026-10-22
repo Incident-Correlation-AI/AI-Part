@@ -1,0 +1,72 @@
+# Milestone 7 — model-selection policy (validation-only).
+#
+# This policy is PRE-DECLARED. It is applied to validation evidence only.
+# The test split is never consulted to select a model, tune a parameter,
+# choose a threshold, or change a decision rule. Test metrics are computed
+# once, after the selection is locked, purely as a final evaluation.
+#
+# This file replaces the M4 auto-picker, which keyed the winner on TEST
+# metrics (see src/anomaly_detector/comparison.py, build_comparison_report).
+# Root cause and resolution are documented in docs/READINESS_AUDIT.md.
+
+policy:
+  name: m7_validation_only_selection
+  description: >-
+    Select the anomaly-detection model using training and validation data
+    only. Test data is reserved for a single final evaluation after the
+    selection decision is locked.
+  primary_objective: "validation F1 subject to a false-alert budget and a robustness floor"
+  decided_before_seeing: "any test metric"
+
+  # Weighted validation score. Weights are applied to the VALIDATION metrics
+  # of each candidate. All components are oriented so that HIGHER is better.
+  weights:
+    f1: 0.30
+    precision: 0.25
+    recall: 0.20
+    false_positive_rate: 0.15   # inverted: (1 - fpr)
+    pr_auc: 0.10
+
+  # A challenger must beat the incumbent by at least this margin on the
+  # weighted validation score. Below the margin the incumbent is retained.
+  min_improvement_margin: 0.02
+
+  # The incumbent (the model already in production use) is retained unless a
+  # challenger beats it by the margin above AND satisfies every robustness
+  # floor below. This implements the M4 pre-declared rule: "If no candidate
+  # clearly outperforms baseline, retain M3 Isolation Forest."
+  incumbent: m3_isolation_forest_reference
+  tie_break: >-
+    Prefer the incumbent, then the model with the lower validation false
+    positive rate, then the lower runtime, then the simpler model.
+
+  # Robustness floors. A candidate that fails ANY floor cannot be selected,
+  # no matter how good its validation F1 is. These encode the M5 findings:
+  # a model that flags every benign window is not usable.
+  robustness_floors:
+    max_validation_false_positive_rate: 0.25
+    min_validation_recall: 0.50
+    min_validation_precision: 0.50
+    max_benign_shift_flag_rate: 0.50
+    max_missing_telemetry_flag_rate: 0.50
+
+  # Fairness requirements: all candidates must be trained under the same
+  # policy, on the same rows, with the same features and preprocessing.
+  fairness:
+    same_features: true
+    same_samples: true
+    same_preprocessing: true
+    training_data_policy: normal_only
+    enforce_matching_training_rows: true
+
+  # Candidates eligible for the M7 comparison. The M4 campaign already
+  # compared these; a broad new model campaign is explicitly out of scope.
+  eligible_candidates:
+    - m3_isolation_forest_reference
+    - lof_novelty
+
+  # Hard guards against test leakage. These are asserted in code and tested.
+  guards:
+    forbid_test_metrics_in_selection: true
+    forbid_test_labels_in_selection: true
+    forbid_test_split_as_threshold_source: true
