@@ -60,6 +60,9 @@ class BaselineDetector:
         self.missing_value_policy = missing_value_policy
         self.estimator = self._build_estimator(model_config)
         self.is_fitted = False
+        # Version of the serialized artifact this instance came from.  Set by
+        # :meth:`load`; ``None`` for a freshly constructed (unfitted) model.
+        self.artifact_version: Optional[int] = None
 
     # -- construction ---------------------------------------------------
     @staticmethod
@@ -174,6 +177,7 @@ class BaselineDetector:
         )
         detector.estimator = payload["estimator"]
         detector.is_fitted = bool(payload.get("is_fitted", True))
+        detector.artifact_version = payload.get("artifact_version")
         return detector
 
     def contract(self) -> Dict[str, Any]:
