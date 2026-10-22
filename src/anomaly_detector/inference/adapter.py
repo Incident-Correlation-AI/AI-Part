@@ -18,8 +18,24 @@ errored result is **not** forwarded as if it were a normal prediction.
 """
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
+from .contract import (
+    CONTRACT_VERSION,
+    FeatureWindowRequest,
+    InferenceResult,
+    InferenceStatus,
+    ReasonCode,
+    RoutingDecision,
+    route_result,
+)
 
-from .contract import FeatureWindowRequest, InferenceResult, InferenceStatus
+
+class SinkDeliveryError(RuntimeError):
+    """Raised when the downstream sink fails while accepting a scored window.
+
+    The window *was* scored, but it was **not** delivered. This is never
+    reported as a successful delivery, and it never turns into a normal
+    result.
+    """
 
 
 class DownstreamSink(Protocol):
@@ -60,12 +76,22 @@ class ScoredWindow:
 
     @classmethod
     def from_result(cls, result: InferenceResult) -> "ScoredWindow":
+        """Build a forwarded window from a scored result.
+
+        Raises ``ValueError`` for anything that is not a genuine scored
+        result. An explicit check is used rather than ``assert`` so the
+        guarantee also holds when Python runs with ``-O``.
+        """
         if result.status is not InferenceStatus.SCORED:
             raise ValueError(
                 f"refusing to build a ScoredWindow from a {result.status.value} result "
                 f"(reason: {result.reason_code.value})"
             )
-        assert result.raw_score is not None and result.is_anomaly is not None
+        if result.raw_score is None or result.is_anomaly is None:
+            raise ValueError(
+                "refusing to build a ScoredWindow from a scored result without a "
+                "raw score and a decision"
+            )
         return cls(
             window_id=result.window_id or "",
             raw_score=float(result.raw_score),
@@ -119,11 +145,77 @@ class RejectedWindow:
 
 
 @dataclass
+class SinkFailure:
+    """A scored window that the downstream sink refused or failed to accept.
+
+    The window was scored successfully, but it was **not** delivered. It is
+    recorded here rather than in the forwarded list, so a delivery failure can
+    never be mistaken for a successful delivery.
+    """
+
+    window_id: Optional[str]
+    error_type: str
+    message: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "window_id": self.window_id,
+            "error_type": self.error_type,
+            "message": self.message,
+        }
+
+
+@dataclass
+class UnscoredWindow:
+    """A window that was not forwarded, with its status and safe provenance.
+
+    This is the record kept for every non-``scored`` outcome. The status and
+    the reason code are preserved so the caller can distinguish
+    *insufficient data* from *invalid input* from *model unavailable* from
+    *inference error* — and from a malformed result that has no status at all.
+    """
+
+    window_id: Optional[str]
+    status: str
+    reason_code: str
+    reason: str
+    detail: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "window_id": self.window_id,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "reason": self.reason,
+            "detail": self.detail,
+        }
+
+
+@dataclass
 class AdapterOutcome:
-    """What happened to a batch of windows at the boundary."""
+    """What happened to a batch of windows at the boundary.
+
+    ``unscored`` is the single source of truth for every non-``scored``
+    outcome. ``rejected`` is retained as a **backward-compatible alias**
+    (Milestone 6 API) over the same records.
+    """
 
     scored: List[ScoredWindow] = field(default_factory=list)
-    rejected: List[RejectedWindow] = field(default_factory=list)
+    unscored: List[UnscoredWindow] = field(default_factory=list)
+    sink_failures: List[SinkFailure] = field(default_factory=list)
+
+    @property
+    def rejected(self) -> List["RejectedWindow"]:
+        """Backward-compatible alias for :attr:`unscored` (Milestone 6 API)."""
+        return [
+            RejectedWindow(
+                window_id=item.window_id,
+                status=item.status,
+                reason_code=item.reason_code,
+                reason=item.reason,
+            )
+            for item in self.unscored
+        ]
 
     @property
     def forwarded_count(self) -> int:
@@ -131,14 +223,34 @@ class AdapterOutcome:
 
     @property
     def rejected_count(self) -> int:
-        return len(self.rejected)
+        """Backward-compatible alias for :meth:`unscored_count`."""
+        return len(self.unscored)
+
+    @property
+    def unscored_count(self) -> int:
+        return len(self.unscored)
+
+    @property
+    def sink_failure_count(self) -> int:
+        return len(self.sink_failures)
+
+    def unscored_by_status(self) -> Dict[str, int]:
+        """Count of unscored outcomes per status."""
+        counts: Dict[str, int] = {}
+        for item in self.unscored:
+            counts[item.status] = counts.get(item.status, 0) + 1
+        return counts
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "forwarded": [w.to_dict() for w in self.scored],
             "rejected": [r.to_dict() for r in self.rejected],
+            "unscored": [u.to_dict() for u in self.unscored],
+            "sink_failures": [f.to_dict() for f in self.sink_failures],
             "forwarded_count": self.forwarded_count,
             "rejected_count": self.rejected_count,
+            "unscored_count": self.unscored_count,
+            "sink_failure_count": self.sink_failure_count,
         }
 
 
@@ -146,43 +258,181 @@ class EvidenceCorrelationAdapter:
     """Reference adapter showing the expected call pattern.
 
     The downstream component implements :class:`DownstreamSink`.  This
-    adapter calls the ML interface, branches on the explicit status and
-    forwards only scored windows.
+    adapter calls the ML interface, applies the **canonical** forwarding rule
+    (:func:`~anomaly_detector.inference.contract.route_result`) and forwards
+    only scored windows.
+
+    Milestone 8 hardening:
+
+    * the forwarding decision is made in exactly one place
+      (:func:`route_result`) so no caller can implement a subtly different
+      check;
+    * an unscored result is handed to an explicit ``unscored_handler`` and
+      recorded with its status and safe provenance;
+    * a malformed or missing status **fails closed** — it is never forwarded;
+    * a sink failure is recorded explicitly as a :class:`SinkFailure`; it is
+      never reported as a successful delivery, and it never aborts the rest
+      of the batch.
     """
 
-    def __init__(self, detector: Any, sink: Optional[DownstreamSink] = None) -> None:
+    def __init__(
+        self,
+        detector: Any,
+        sink: Optional[DownstreamSink] = None,
+        unscored_handler: Optional[Callable[[UnscoredWindow], None]] = None,
+    ) -> None:
         self._detector = detector
         self._sink = sink
+        self._unscored_handler = unscored_handler
 
+    # -- single window ---------------------------------------------------
     def handle_window(self, request: FeatureWindowRequest) -> Optional[ScoredWindow]:
-        """Score one window and forward it when it was actually scored."""
-        result = self._detector.score_window(request)
-        if result.status is not InferenceStatus.SCORED:
+        """Score one window and forward it when it was actually scored.
+
+        Returns the forwarded :class:`ScoredWindow`, or ``None`` when the
+        window was not forwarded (not scored, or the sink failed).  An
+        unscored window is recorded through the ``unscored_handler``.
+
+        Raises
+        ------
+        SinkDeliveryError
+            When the window was scored but the sink failed to accept it. The
+            window is *not* reported as delivered.
+        """
+        result = self._score(request)
+        decision = route_result(result)
+
+        if not decision.forwardable:
+            self._record_unscored(result, decision)
             return None
+
         scored = ScoredWindow.from_result(result)
         if self._sink is not None:
-            self._sink.handle_scored_window(result)
+            try:
+                self._sink.handle_scored_window(result)
+            except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
+                raise SinkDeliveryError(
+                    f"downstream sink failed to accept window {scored.window_id!r}: {exc}"
+                ) from exc
         return scored
 
+    # -- batch -----------------------------------------------------------
     def handle_windows(self, requests: Sequence[FeatureWindowRequest]) -> AdapterOutcome:
-        """Score a batch and split the outcomes into forwarded / rejected."""
+        """Score a batch and route each outcome.
+
+        One bad window never fails the batch: every window gets its own
+        outcome. A sink failure is recorded in ``outcome.sink_failures`` and
+        the remaining windows are still processed.
+        """
         outcome = AdapterOutcome()
-        for request in requests:
-            result = self._detector.score_window(request)
-            if result.status is not InferenceStatus.SCORED:
-                outcome.rejected.append(
-                    RejectedWindow(
-                        window_id=result.window_id,
-                        status=result.status.value,
-                        reason_code=result.reason_code.value,
-                        reason=result.reason,
+        seen: Dict[str, int] = {}
+        for index, request in enumerate(requests):
+            # Duplicate window ids inside one batch are rejected for the later
+            # occurrence, matching the existing M6 contract behaviour
+            # (AnomalyDetector.score_windows). No stronger, exactly-once
+            # guarantee is claimed: this is a per-batch, in-process check.
+            window_id = getattr(request, "window_id", None)
+            if isinstance(window_id, str) and window_id:
+                if window_id in seen:
+                    record = UnscoredWindow(
+                        window_id=window_id,
+                        status=InferenceStatus.INVALID_INPUT.value,
+                        reason_code=ReasonCode.DUPLICATE_WINDOW_ID.value,
+                        reason=f"duplicate window_id {window_id!r} in batch "
+                               f"(first seen at index {seen[window_id]})",
+                        detail="duplicate window id",
+                    )
+                    outcome.unscored.append(record)
+                    self._notify_unscored(record)
+                    continue
+                seen[window_id] = index
+
+            result = self._score(request)
+            decision = route_result(result)
+
+            if not decision.forwardable:
+                self._record_unscored(result, decision, outcome)
+                continue
+
+            try:
+                scored = ScoredWindow.from_result(result)
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                outcome.unscored.append(
+                    UnscoredWindow(
+                        window_id=decision.window_id,
+                        status=decision.status,
+                        reason_code=decision.reason_code,
+                        reason=decision.reason,
+                        detail=f"scored result could not be converted: {exc}",
                     )
                 )
+                self._notify_unscored(outcome.unscored[-1])
                 continue
-            outcome.scored.append(ScoredWindow.from_result(result))
+
             if self._sink is not None:
-                self._sink.handle_scored_window(result)
+                try:
+                    self._sink.handle_scored_window(result)
+                except Exception as exc:  # noqa: BLE001 - explicit, not a success
+                    outcome.sink_failures.append(
+                        SinkFailure(
+                            window_id=scored.window_id,
+                            error_type=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    # The window was NOT delivered: it must not appear in the
+                    # forwarded list.
+                    continue
+
+            outcome.scored.append(scored)
         return outcome
+
+    # -- internals -------------------------------------------------------
+    def _score(self, request: FeatureWindowRequest) -> Any:
+        """Score one window, converting an unexpected failure into a result.
+
+        An exception escaping the detector is turned into an explicit
+        ``inference_error`` result. It is never silently dropped, and it is
+        never converted into a normal (not-anomalous) outcome.
+        """
+        try:
+            return self._detector.score_window(request)
+        except Exception as exc:  # noqa: BLE001 - reported as inference_error
+            return InferenceResult(
+                contract_version=CONTRACT_VERSION,
+                status=InferenceStatus.INFERENCE_ERROR,
+                reason_code=ReasonCode.INFERENCE_FAILED,
+                reason=f"scoring raised {type(exc).__name__}: {exc}",
+                window_id=getattr(request, "window_id", None),
+            )
+
+    def _record_unscored(
+        self,
+        result: Any,
+        decision: RoutingDecision,
+        outcome: Optional[AdapterOutcome] = None,
+    ) -> UnscoredWindow:
+        record = UnscoredWindow(
+            window_id=decision.window_id,
+            status=decision.status,
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            detail=decision.detail,
+        )
+        if outcome is not None:
+            outcome.unscored.append(record)
+        self._notify_unscored(record)
+        return record
+
+    def _notify_unscored(self, record: UnscoredWindow) -> None:
+        if self._unscored_handler is None:
+            return
+        try:
+            self._unscored_handler(record)
+        except Exception:  # noqa: BLE001 - a handler failure must not abort routing
+            # The record is already in the outcome; a broken handler must not
+            # stop the batch or turn anything into a normal result.
+            pass
 
 
 class RecordingSink:

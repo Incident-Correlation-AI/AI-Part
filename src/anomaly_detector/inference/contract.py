@@ -212,7 +212,6 @@ class InferenceResult:
     ``is_anomaly`` is ``None`` for every non-``scored`` status — an unscored
     window is never reported as normal.
     """
-
     contract_version: str
     status: InferenceStatus
     reason_code: ReasonCode
@@ -280,6 +279,151 @@ class InferenceResult:
             "extra": dict(self.extra),
             "duration_ms": self.duration_ms,
         }
+
+
+# ---------------------------------------------------------------------------
+# Routing — the single, canonical forwarding rule (Milestone 8)
+# ---------------------------------------------------------------------------
+
+#: The only status that may enter the downstream correlation path.
+FORWARDABLE_STATUS = InferenceStatus.SCORED
+
+#: Status string used when a result is missing or its status is unreadable.
+UNKNOWN_STATUS = "unknown"
+
+
+@dataclass
+class RoutingDecision:
+    """The outcome of applying the canonical forwarding rule to one result.
+
+    Attributes
+    ----------
+    forwardable:
+        ``True`` only when the result's status is exactly ``scored``. Every
+        other case — including a missing result, a malformed status or an
+        unknown status value — fails closed and is **not** forwardable.
+    status:
+        The status as a safe string. Never raises, even for a malformed
+        status.
+    reason_code:
+        The stable reason code, when readable.
+    reason:
+        The human-readable reason, when readable.
+    window_id:
+        The traceable window id, when readable.
+    is_anomaly:
+        The decision, when the result was actually scored. ``None`` otherwise.
+    detail:
+        Why the decision was made (for example ``"malformed status"``).
+    """
+
+    forwardable: bool
+    status: str
+    reason_code: str = ""
+    reason: str = ""
+    window_id: Optional[str] = None
+    is_anomaly: Optional[bool] = None
+    detail: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "forwardable": self.forwardable,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "reason": self.reason,
+            "window_id": self.window_id,
+            "is_anomaly": self.is_anomaly,
+            "detail": self.detail,
+        }
+
+
+def route_result(result: Any) -> RoutingDecision:
+    """Apply the **canonical** forwarding rule to one inference result.
+
+    This is the single place where "may this result be forwarded to the
+    downstream correlation component?" is decided. Every caller must use this
+    function (or :func:`is_forwardable`) so that no caller can implement a
+    subtly different check.
+
+    The rule is deliberately strict and **fails closed**:
+
+    * a result whose status is exactly ``scored`` is forwardable;
+    * every other status (``insufficient_data``, ``invalid_input``,
+      ``model_unavailable``, ``inference_error``) is not;
+    * a missing result, a ``None`` status, a status that is not an
+      :class:`InferenceStatus`, or a status whose value is unrecognised is
+      not forwardable.
+
+    It never converts an unknown outcome into ``is_anomaly = False``.
+    """
+    if result is None:
+        return RoutingDecision(
+            forwardable=False,
+            status=UNKNOWN_STATUS,
+            detail="no result was produced",
+        )
+
+    status = getattr(result, "status", None)
+    if status is None:
+        return RoutingDecision(
+            forwardable=False,
+            status=UNKNOWN_STATUS,
+            window_id=_safe_window_id(result),
+            detail="result has no status",
+        )
+    if not isinstance(status, InferenceStatus):
+        return RoutingDecision(
+            forwardable=False,
+            status=UNKNOWN_STATUS,
+            window_id=_safe_window_id(result),
+            detail=f"malformed status of type {type(status).__name__}",
+        )
+
+    if status is not FORWARDABLE_STATUS:
+        return RoutingDecision(
+            forwardable=False,
+            status=status.value,
+            reason_code=_safe_attr(result, "reason_code", ""),
+            reason=_safe_attr(result, "reason", ""),
+            window_id=_safe_window_id(result),
+            is_anomaly=None,
+            detail=f"status {status.value!r} is not forwardable",
+        )
+
+    return RoutingDecision(
+        forwardable=True,
+        status=status.value,
+        reason_code=_safe_attr(result, "reason_code", ""),
+        reason=_safe_attr(result, "reason", ""),
+        window_id=_safe_window_id(result),
+        is_anomaly=getattr(result, "is_anomaly", None),
+        detail="scored",
+    )
+
+
+def is_forwardable(result: Any) -> bool:
+    """True only when the result may enter the downstream correlation path."""
+    return route_result(result).forwardable
+
+
+def _safe_attr(obj: Any, name: str, default: Any = "") -> Any:
+    """Read an attribute without raising, tolerating a malformed object."""
+    try:
+        value = getattr(obj, name, default)
+    except Exception:  # noqa: BLE001 - a broken result must not crash routing
+        return default
+    if hasattr(value, "value"):  # an enum member
+        return getattr(value, "value")
+    if value is None:
+        return default
+    return value
+
+
+def _safe_window_id(result: Any) -> Optional[str]:
+    value = _safe_attr(result, "window_id", None)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -17,13 +17,18 @@ incidents, delivers alerts or remediates anything.
 from .contract import (
     CONTRACT_VERSION,
     FEATURE_SCHEMA_VERSION,
+    FORWARDABLE_STATUS,
+    UNKNOWN_STATUS,
     FeatureWindowRequest,
     InferenceResult,
     InferenceStatus,
     ReasonCode,
+    RoutingDecision,
     feature_values_in_order,
     is_aware,
+    is_forwardable,
     make_window_id,
+    route_result,
     to_utc,
 )
 from .detector import (
@@ -41,6 +46,9 @@ from .adapter import (
     RecordingSink,
     RejectedWindow,
     ScoredWindow,
+    SinkDeliveryError,
+    SinkFailure,
+    UnscoredWindow,
 )
 
 __all__ = [
@@ -53,6 +61,7 @@ __all__ = [
     "DownstreamSink",
     "EvidenceCorrelationAdapter",
     "FEATURE_SCHEMA_VERSION",
+    "FORWARDABLE_STATUS",
     "FeatureWindowRequest",
     "InferenceResult",
     "InferenceStatus",
@@ -60,10 +69,17 @@ __all__ = [
     "ReasonCode",
     "RecordingSink",
     "RejectedWindow",
+    "RoutingDecision",
     "ScoredWindow",
+    "SinkDeliveryError",
+    "SinkFailure",
+    "UNKNOWN_STATUS",
+    "UnscoredWindow",
     "feature_values_in_order",
     "is_aware",
+    "is_forwardable",
     "load_detector",
     "make_window_id",
+    "route_result",
     "to_utc",
 ]
