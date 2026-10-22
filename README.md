@@ -18,6 +18,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
   readiness ([`docs/DATA_READINESS.md`](docs/DATA_READINESS.md)).
 - **Milestone 4** — model comparison and improvement: MAD baseline, LOF (novelty) comparison against M3, predeclared criteria, validation-only selection, unique M4 artifacts ([`docs/MODEL_COMPARISON.md`](docs/MODEL_COMPARISON.md), [`MILESTONE_4_REPORT.md`](MILESTONE_4_REPORT.md)).
 - **Milestone 5** — robustness, drift, and realistic validation: scenario testing with selected M3 model (no retraining), false-alert/miss analysis ([`MILESTONE_5_REPORT.md`](MILESTONE_5_REPORT.md)).
+- **Milestone 6** — stable ML inference contract and integration boundary: a versioned, callable interface (feature window in → structured result out) for the downstream correlation/explanation teammate ([`docs/ml_inference_contract.md`](docs/ml_inference_contract.md), [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md), [`MILESTONE_6_REPORT.md`](MILESTONE_6_REPORT.md)).
 
 ---
 
@@ -55,12 +56,25 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - **(M3)** Write a **model manifest** (library version, seed, feature schema, data
   policy, split provenance, score direction, threshold method) so any run can be
   audited and reproduced.
+- **(M4)** Compare a small, justified candidate set (robust MAD, LOF in novelty mode)
+  against the M3 baseline using **pre-declared criteria**, selecting and thresholding
+  on the **validation split only** and evaluating test once, with unique M4 artifacts.
+- **(M5)** Validate the selected detector against **controlled scenarios** (normal
+  variation, service anomalies, telemetry faults, low-volume boundaries, distribution
+  shifts) **without retraining**, and report the false-alert and missed-detection
+  failure modes.
+- **(M6)** Expose a **stable, versioned inference interface**: one aggregated feature
+  window in, one structured result out (`scored` / `insufficient_data` /
+  `invalid_input` / `model_unavailable` / `inference_error`), with explicit feature
+  order, preprocessing, score direction, threshold and model versions, and a
+  documented integration boundary for the downstream correlation component.
 
 **Does not (belongs to a later milestone or teammate)**
 
-- No statistical baseline comparison, no hyperparameter search, no model comparison.
 - No evidence correlation, incident reasoning, root-cause hypotheses, or explanations.
 - No API, web server, dashboard, cloud SDK, external LLM, or AWS code.
+- No alert delivery, response automation, or remediation.
+- No automatic online learning, retraining, or threshold adjustment at inference time.
 
 ---
 
@@ -92,6 +106,13 @@ raw events (dicts / JSON)
  evaluation.py      per-split metrics  ──► reports/metrics.{json,md}
         ▼
  artifacts.py       model.joblib + manifest.json + predictions_<split>.csv
+        │
+        ▼  M6
+ inference/         load_detector() / score_window() / score_windows()
+                    ──► InferenceResult (status, score, decision, provenance)
+                         │
+                         ▼
+ inference/adapter.py  ──► downstream boundary (evidence correlation)
 ```
 
 | Module | Responsibility |
@@ -134,6 +155,15 @@ raw events (dicts / JSON)
 | `src/anomaly_detector/comparison.py` | **M4** Comparison orchestration (validation-only selection). |
 | `scripts/run_comparison.py` | **M4** Run the comparison. |
 | `docs/MODEL_COMPARISON.md` | **M4** Comparison design and usage. |
+| `src/anomaly_detector/robustness_scenarios.py` | **M5** deterministic robustness scenario generators (labels never enter features). |
+| `src/anomaly_detector/robustness.py` | **M5** robustness validation + failure analysis over the selected model. |
+| `scripts/run_robustness.py` | **M5** Run the robustness validation. |
+| `src/anomaly_detector/inference/contract.py` | **M6** versioned inference contract: request/result types, statuses, reason codes. |
+| `src/anomaly_detector/inference/detector.py` | **M6** `load_detector` / `score_window` / `score_windows` (no retraining, no fitting on production data). |
+| `src/anomaly_detector/inference/adapter.py` | **M6** downstream integration boundary (`ScoredWindow`, `DownstreamSink`, adapter). |
+| `scripts/smoke_test_inference.py` | **M6** CLI smoke test for the inference interface. |
+| `docs/ml_inference_contract.md` | **M6** normative input/output contract and behaviour matrix. |
+| `docs/ML_HANDOFF.md` | **M6** handoff + integration checklist for the downstream teammate. |
 
 ---
 
@@ -276,6 +306,15 @@ python scripts/run_baseline.py evaluate --split test   # artifacts/baseline/repo
 # --- Milestone 4: model comparison ------------------------------------------
 # (8) Compare candidates against M3 with predeclared criteria
 python scripts/run_comparison.py --config configs/comparison.yaml
+
+# --- Milestone 5: robustness validation --------------------------------------
+# (9) Score controlled scenarios with the selected model (no retraining)
+python scripts/run_robustness.py
+
+# --- Milestone 6: inference interface ----------------------------------------
+# (10) Smoke-test the stable inference interface
+python scripts/smoke_test_inference.py
+python scripts/smoke_test_inference.py --all
 ```
 
 Outputs:
@@ -301,27 +340,12 @@ Outputs:
 | `artifacts/comparison/run_*/reports/comparison_report.{json,md}` | **M4** comparison with predeclared criteria |
 | `artifacts/comparison/run_*/comparison_manifest.json` | **M4** run metadata |
 | `artifacts/comparison/run_*/predictions/*` | **M4** per-candidate predictions |
+| `artifacts/robustness/run_*/reports/robustness_report.{json,md}` | **M5** per-scenario robustness + failure analysis |
+| `artifacts/robustness/run_*/predictions/*` | **M5** per-scenario predictions |
 
-Outputs:
-
-| File | Description |
-|---|---|
-| `data/synthetic/synthetic_events.json` | Raw synthetic events |
-| `data/synthetic/synthetic_labels.json` | Ground-truth labels (separate) |
-| `data/processed/features.csv` | Numerical feature matrix |
-| `data/processed/metadata.csv` | Window metadata (host, service, time) |
-| `data/processed/labels.csv` | Ground-truth labels |
-| `artifacts/data_quality_report.json` | Data-quality report (Milestone 1) |
-| `artifacts/dataset_adapter_status.json` | Adapter decision/status |
-| `reports/data_quality_report.{json,md}` | **M2** dataset audit |
-| `reports/leakage_audit.{json,md}` | **M2** leakage audit |
-| `data/processed/training_ready/` | **M2** aligned features/labels/metadata + `manifest.json` |
-| `data/processed/splits/<strategy>/` | **M2** per-split tables + `split_manifest.json` |
-| `artifacts/baseline/model/model.joblib` | **M3** fitted Isolation Forest + its input contract |
-| `artifacts/baseline/model/manifest.json` | **M3** model manifest (version, seed, schema, policy, threshold) |
-| `artifacts/baseline/predictions_<split>.csv` | **M3** per-sample score, threshold and flag |
-| `artifacts/baseline/reports/metrics.{json,md}` | **M3** per-split evaluation |
-| `artifacts/baseline/experiment_note.md` | **M3** limitations + reproduction commands |
+The M6 inference interface produces **no artifacts of its own** — it is an
+in-process interface over the M3 model artifact. Its contract lives in
+[`docs/ml_inference_contract.md`](docs/ml_inference_contract.md).
 
 Configuration defaults live in `configs/default.yaml` (window size, seed, output
 paths, empty-window behaviour), `configs/data_readiness.yaml` (Milestone 2 roles,
@@ -413,6 +437,49 @@ Full details live in [`docs/BASELINE.md`](docs/BASELINE.md). Summary:
 
 ---
 
+## 8d. Milestone 6 — the stable ML inference interface
+
+Full details live in [`docs/ml_inference_contract.md`](docs/ml_inference_contract.md)
+and the teammate-facing [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md). Summary:
+
+- **One window in, one versioned result out.** The input is an already-aggregated
+  feature window from the existing pipeline (never raw logs, never a raw event).
+  The output is an `InferenceResult` carrying the status, the raw score, the
+  decision, the model/feature/threshold versions and safe window provenance.
+- **Five explicit statuses** — `scored`, `insufficient_data`, `invalid_input`,
+  `model_unavailable`, `inference_error`. A window that could not be scored is
+  reported with `is_anomaly = null`; it is **never** reported as normal.
+- **Feature order and schema are enforced.** The matrix is assembled *by name* from
+  the model's allowlist; unknown feature names, wrong types, `±inf`, naive
+  timestamps and impossible window boundaries are rejected with a reason code.
+  Labels, scenario names, host/service names and IDs are never model features.
+- **No retraining, no fitting on production data.** `load_detector()` loads the
+  selected artifact and its manifest once, cross-checks them, and reuses the
+  training-fitted imputation medians. Nothing is ever fitted at inference time.
+- **Score semantics are preserved.** The score stays
+  `IsolationForest.score_samples` (lower = more anomalous), the decision stays
+  `raw_score <= threshold`, and the result explicitly says it is *not* a probability.
+- **Batch semantics are per row.** One bad row never fails the batch; every row gets
+  its own result. Duplicate `window_id`s within a batch are rejected.
+- **Integration boundary only.** `inference/adapter.py` defines a neutral
+  `DownstreamSink` protocol and a reference adapter that forwards *only* scored
+  results. No evidence correlation, no explanation, no alerting, no remediation,
+  no web framework.
+
+```python
+from anomaly_detector.inference import InferenceStatus, load_detector
+
+detector = load_detector()                 # load once
+result = detector.score_window(request)    # score one feature window
+
+if result.status is InferenceStatus.SCORED:
+    ...  # result.raw_score, result.is_anomaly, result.window_id
+else:
+    ...  # result.reason_code — never treat this as "normal"
+```
+
+---
+
 ## 9. Tests
 
 ```bash
@@ -432,7 +499,14 @@ adds coverage for the config guardrails, the schema/missing-value/non-finite
 contract, the score direction and threshold boundary, the test-split refusal, the
 documented fallback, metric edge cases (single-class splits, missing labels), the
 train/validation/test discipline (poisoning the test split changes nothing) and the
-CLI error paths.
+CLI error paths. Milestone 4 adds coverage for the comparison config, the MAD and
+LOF baselines and the comparison artifacts. Milestone 5 adds coverage for
+scenario reproducibility, label isolation from features, missing-value handling and
+the robustness artifacts. Milestone 6 adds coverage for the inference contract
+(feature order, schema version, missing/invalid/NaN/infinite inputs, window
+boundaries, artifact/manifest mismatch, duplicate window ids, determinism), the
+status vocabulary (unscored is never normal) and the downstream integration
+boundary.
 
 ---
 
@@ -445,11 +519,14 @@ ml-anomaly-detector/
 ├── MILESTONE_2_REPORT.md
 ├── MILESTONE_3_REPORT.md
 ├── MILESTONE_4_REPORT.md
+├── MILESTONE_5_REPORT.md
+├── MILESTONE_6_REPORT.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml}
-├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md}
+├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml, robustness.yaml}
+├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md,
+│        ml_inference_contract.md, ML_HANDOFF.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -480,6 +557,13 @@ ml-anomaly-detector/
 │   ├── mad_baseline.py            # M4
 │   ├── lof_baseline.py            # M4
 │   ├── comparison.py              # M4
+│   ├── robustness_scenarios.py    # M5
+│   ├── robustness.py              # M5
+│   ├── inference/                 # M6
+│   │   ├── __init__.py
+│   │   ├── contract.py            # request/result types, statuses, reason codes
+│   │   ├── detector.py            # load_detector / score_window / score_windows
+│   │   └── adapter.py             # downstream integration boundary
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -490,7 +574,9 @@ ml-anomaly-detector/
 │   ├── make_splits.py             # M2
 │   ├── prepare_experiments.py     # M2
 │   ├── run_baseline.py            # M3
-│   └── run_comparison.py          # M4
+│   ├── run_comparison.py          # M4
+│   ├── run_robustness.py          # M5
+│   └── smoke_test_inference.py    # M6
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -506,22 +592,41 @@ ml-anomaly-detector/
 - Loghub HDFS labels are block-level (instance-level), not window-level; projecting
   them onto windows is deferred and carries a temporal-leakage risk.
 - The feature set is intentionally modest for this milestone.
-- No hyperparameter search or model comparison yet; the Isolation Forest parameters
-  are fixed configuration values.
+- The Isolation Forest parameters are fixed configuration values; M4 compared a
+  small candidate set but retained the baseline, and no broad hyperparameter search
+  was performed.
 - The anomaly score is a ranking statistic, **not** a probability.
 - Detection delay is not measured — the label contract has no anomaly onset time.
-- `model.joblib` is pickle-based; load it only from a trusted source.
+- `model.joblib` is pickle-based; load it only from a trusted source. The M6 loader
+  refuses paths outside the repository's `artifacts/` tree unless explicitly allowed.
+- Milestone 5 found the detector is over-sensitive to legitimate distribution shifts
+  and to missing telemetry; the M6 interface exposes `data_quality.imputed_features`
+  and optional abstention policies, but the default scoring behaviour is unchanged.
+- The M6 interface is in-process and single-threaded per call: no queueing, caching,
+  rate limiting or concurrency control.
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–4 stop here with a tested, documented data pipeline, a leakage-audited,
+Milestones 1–6 stop here with a tested, documented data pipeline, a leakage-audited,
 reproducible, training-ready dataset (features / labels / metadata kept separate,
-splits produced under three strategies), a reproducible Isolation Forest baseline,
-and a fair comparison against a robust MAD baseline and LOF (novelty) using predeclared
-criteria and validation-only selection. M3 artifacts are preserved; M4 writes unique
-outputs under `artifacts/comparison/`. Future work must reuse the *same* contract:
-the same allowlist, the same missing-value policy, the same score direction and the
-same train/validation/test discipline. Do not use test labels for tuning or selection.
+splits produced under three strategies), a reproducible Isolation Forest baseline, a
+fair comparison against a robust MAD baseline and LOF (novelty) using predeclared
+criteria and validation-only selection, a robustness/failure-mode analysis against
+controlled scenarios, and a **stable, versioned inference interface** for the
+downstream correlation/explanation component.
+
+M1–M5 artifacts are preserved; M4 and M5 write unique outputs under
+`artifacts/comparison/` and `artifacts/robustness/`; M6 produces no artifacts of its
+own — it is an in-process interface over the M3 model artifact. Future work must
+reuse the *same* contract: the same allowlist, the same missing-value policy, the
+same score direction and the same train/validation/test discipline. Do not use test
+labels for tuning or selection, and do not retrain or re-threshold at inference
+time.
+
+The M6 contract is versioned (`CONTRACT_VERSION = 1.0.0`,
+`FEATURE_SCHEMA_VERSION = features-v1`). Any change to the request/result shape or
+to the feature allowlist must bump those versions and update
+[`docs/ml_inference_contract.md`](docs/ml_inference_contract.md).
 
 **Note for the next milestone:** the synthetic data is generated per-window; group
 splits by `scenario_name` can place all anomalies in one fold (the tooling warns but
