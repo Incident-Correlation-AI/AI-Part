@@ -19,6 +19,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - **Milestone 4** — model comparison and improvement: MAD baseline, LOF (novelty) comparison against M3, predeclared criteria, validation-only selection, unique M4 artifacts ([`docs/MODEL_COMPARISON.md`](docs/MODEL_COMPARISON.md), [`MILESTONE_4_REPORT.md`](MILESTONE_4_REPORT.md)).
 - **Milestone 5** — robustness, drift, and realistic validation: scenario testing with selected M3 model (no retraining), false-alert/miss analysis ([`MILESTONE_5_REPORT.md`](MILESTONE_5_REPORT.md)).
 - **Milestone 6** — stable ML inference contract and integration boundary: a versioned, callable interface (feature window in → structured result out) for the downstream correlation/explanation teammate ([`docs/ml_inference_contract.md`](docs/ml_inference_contract.md), [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md), [`MILESTONE_6_REPORT.md`](MILESTONE_6_REPORT.md)).
+- **Milestone 7** — ML readiness audit and end-to-end local validation: root-caused and fixed the M4 test-leakage in the auto-picker, re-decided the model selection on **validation evidence only**, audited the threshold and abstention policy, and drove the real M1→M6 pipeline end to end ([`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md), [`MILESTONE_7_REPORT.md`](MILESTONE_7_REPORT.md)). **Verdict: `controlled demo only`.**
 
 ---
 
@@ -68,6 +69,12 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
   `invalid_input` / `model_unavailable` / `inference_error`), with explicit feature
   order, preprocessing, score direction, threshold and model versions, and a
   documented integration boundary for the downstream correlation component.
+- **(M7)** **Audit** the component for local-integration readiness: trace and fix the
+  M4 auto-picker that selected a model using **test-set metrics**, re-decide the
+  selection on **validation evidence only** under a pre-declared policy, re-derive
+  the threshold from validation data, audit the abstention/missingness behaviour, and
+  drive the **real** raw-events → features → inference → downstream-sink path with
+  deterministic scenario tests.
 
 **Does not (belongs to a later milestone or teammate)**
 
@@ -75,6 +82,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - No API, web server, dashboard, cloud SDK, external LLM, or AWS code.
 - No alert delivery, response automation, or remediation.
 - No automatic online learning, retraining, or threshold adjustment at inference time.
+- No production-readiness or SLA claim: the M7 verdict is `controlled demo only`.
 
 ---
 
@@ -113,6 +121,10 @@ raw events (dicts / JSON)
                          │
                          ▼
  inference/adapter.py  ──► downstream boundary (evidence correlation)
+        │
+        ▼  M7
+ readiness_audit.py    validation-only selection → threshold audit → verdict
+ e2e_runner.py         raw events → M1 → M6 → neutral sink ──► readiness report
 ```
 
 | Module | Responsibility |
@@ -164,6 +176,12 @@ raw events (dicts / JSON)
 | `scripts/smoke_test_inference.py` | **M6** CLI smoke test for the inference interface. |
 | `docs/ml_inference_contract.md` | **M6** normative input/output contract and behaviour matrix. |
 | `docs/ML_HANDOFF.md` | **M6** handoff + integration checklist for the downstream teammate. |
+| `src/anomaly_detector/selection_policy.py` | **M7** pre-declared validation-only selection policy (rejects test metrics structurally). |
+| `src/anomaly_detector/readiness_audit.py` | **M7** fair comparison, threshold/abstention audit, readiness verdict, reports. |
+| `src/anomaly_detector/e2e_scenarios.py` | **M7** raw-event end-to-end scenarios (ground truth kept out of features). |
+| `src/anomaly_detector/e2e_runner.py` | **M7** drives the real M1 → M6 path into a neutral downstream sink. |
+| `scripts/run_readiness_audit.py` | **M7** Run the readiness audit. |
+| `docs/READINESS_AUDIT.md` | **M7** Audit design, M4 root cause, threshold findings, readiness verdict. |
 
 ---
 
@@ -315,6 +333,10 @@ python scripts/run_robustness.py
 # (10) Smoke-test the stable inference interface
 python scripts/smoke_test_inference.py
 python scripts/smoke_test_inference.py --all
+
+# --- Milestone 7: readiness audit ---------------------------------------------
+# (11) Validation-only selection, threshold/abstention audit, end-to-end pipeline
+python scripts/run_readiness_audit.py
 ```
 
 Outputs:
@@ -342,6 +364,8 @@ Outputs:
 | `artifacts/comparison/run_*/predictions/*` | **M4** per-candidate predictions |
 | `artifacts/robustness/run_*/reports/robustness_report.{json,md}` | **M5** per-scenario robustness + failure analysis |
 | `artifacts/robustness/run_*/predictions/*` | **M5** per-scenario predictions |
+| `artifacts/readiness/run_*/reports/readiness_audit.{json,md}` | **M7** readiness audit (selection, threshold, e2e, verdict) |
+| `artifacts/readiness/run_*/readiness_manifest.json` | **M7** run metadata |
 
 The M6 inference interface produces **no artifacts of its own** — it is an
 in-process interface over the M3 model artifact. Its contract lives in
@@ -350,9 +374,11 @@ in-process interface over the M3 model artifact. Its contract lives in
 Configuration defaults live in `configs/default.yaml` (window size, seed, output
 paths, empty-window behaviour), `configs/data_readiness.yaml` (Milestone 2 roles,
 policy, splits and export paths), `configs/baseline.yaml` (Milestone 3 model
-parameters, feature allowlist, data policies, threshold rule and paths) and
-`configs/comparison.yaml` (Milestone 4 predeclared criteria and candidates). All
-paths are relative to the repo root.
+parameters, feature allowlist, data policies, threshold rule and paths),
+`configs/comparison.yaml` (Milestone 4 predeclared criteria and candidates),
+`configs/robustness.yaml` (Milestone 5 scenarios) and `configs/selection.yaml`
+(Milestone 7 pre-declared validation-only selection policy). All paths are
+relative to the repo root.
 
 ---
 
@@ -506,7 +532,12 @@ the robustness artifacts. Milestone 6 adds coverage for the inference contract
 (feature order, schema version, missing/invalid/NaN/infinite inputs, window
 boundaries, artifact/manifest mismatch, duplicate window ids, determinism), the
 status vocabulary (unscored is never normal) and the downstream integration
-boundary.
+boundary. Milestone 7 adds coverage for the validation-only selection policy
+(test metrics are structurally rejected), the incumbent-retention and
+robustness-floor rules, the corrected M4 auto-picker, the threshold audit, the
+readiness verdict, and the end-to-end path (malformed event rejected,
+duplicate de-duplicated, late event re-windowed, missing value imputed and
+reported, no unscored window forwarded as normal).
 
 ---
 
@@ -521,12 +552,13 @@ ml-anomaly-detector/
 ├── MILESTONE_4_REPORT.md
 ├── MILESTONE_5_REPORT.md
 ├── MILESTONE_6_REPORT.md
+├── MILESTONE_7_REPORT.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml, robustness.yaml}
+├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml, robustness.yaml, selection.yaml}
 ├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md,
-│        ml_inference_contract.md, ML_HANDOFF.md}
+│        ml_inference_contract.md, ML_HANDOFF.md, READINESS_AUDIT.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -564,6 +596,10 @@ ml-anomaly-detector/
 │   │   ├── contract.py            # request/result types, statuses, reason codes
 │   │   ├── detector.py            # load_detector / score_window / score_windows
 │   │   └── adapter.py             # downstream integration boundary
+│   ├── selection_policy.py        # M7 validation-only selection policy
+│   ├── readiness_audit.py         # M7 fair comparison, threshold audit, verdict
+│   ├── e2e_scenarios.py           # M7 raw-event end-to-end scenarios
+│   ├── e2e_runner.py              # M7 real M1 -> M6 -> sink driver
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -576,7 +612,8 @@ ml-anomaly-detector/
 │   ├── run_baseline.py            # M3
 │   ├── run_comparison.py          # M4
 │   ├── run_robustness.py          # M5
-│   └── smoke_test_inference.py    # M6
+│   ├── smoke_test_inference.py    # M6
+│   └── run_readiness_audit.py     # M7
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -604,32 +641,44 @@ ml-anomaly-detector/
   and optional abstention policies, but the default scoring behaviour is unchanged.
 - The M6 interface is in-process and single-threaded per call: no queueing, caching,
   rate limiting or concurrency control.
+- **Milestone 7 verdict: `controlled demo only`.** The interface, split discipline
+  and pipeline are sound, but every result is synthetic, one injected anomaly was
+  missed, and the M5 false-alert weaknesses are unresolved. **No production-readiness
+  claim is made.** See [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md).
+- M7 fixed the M4 auto-picker that selected a model using test-set metrics, and the
+  unfair training rows given to the MAD/LOF candidates. The historical M4 run
+  directory is preserved unchanged; a fresh run now agrees with the written M4 report.
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–6 stop here with a tested, documented data pipeline, a leakage-audited,
+Milestones 1–7 stop here with a tested, documented data pipeline, a leakage-audited,
 reproducible, training-ready dataset (features / labels / metadata kept separate,
 splits produced under three strategies), a reproducible Isolation Forest baseline, a
-fair comparison against a robust MAD baseline and LOF (novelty) using predeclared
-criteria and validation-only selection, a robustness/failure-mode analysis against
-controlled scenarios, and a **stable, versioned inference interface** for the
-downstream correlation/explanation component.
+fair comparison against a robust MAD baseline and LOF (novelty), a
+robustness/failure-mode analysis against controlled scenarios, a **stable, versioned
+inference interface** for the downstream correlation/explanation component, and a
+**readiness audit** that root-caused and fixed the M4 test-leakage in the auto-picker
+and re-decided the model selection on validation evidence only.
 
-M1–M5 artifacts are preserved; M4 and M5 write unique outputs under
-`artifacts/comparison/` and `artifacts/robustness/`; M6 produces no artifacts of its
-own — it is an in-process interface over the M3 model artifact. Future work must
-reuse the *same* contract: the same allowlist, the same missing-value policy, the
-same score direction and the same train/validation/test discipline. Do not use test
-labels for tuning or selection, and do not retrain or re-threshold at inference
-time.
+M1–M5 artifacts are preserved; M4, M5 and M7 write unique outputs under
+`artifacts/comparison/`, `artifacts/robustness/` and `artifacts/readiness/`; M6
+produces no artifacts of its own — it is an in-process interface over the M3 model
+artifact. Future work must reuse the *same* contract: the same allowlist, the same
+missing-value policy, the same score direction and the same train/validation/test
+discipline. Do not use test labels for tuning or selection, and do not retrain or
+re-threshold at inference time.
 
 The M6 contract is versioned (`CONTRACT_VERSION = 1.0.0`,
 `FEATURE_SCHEMA_VERSION = features-v1`). Any change to the request/result shape or
 to the feature allowlist must bump those versions and update
-[`docs/ml_inference_contract.md`](docs/ml_inference_contract.md).
+[`docs/ml_inference_contract.md`](docs/ml_inference_contract.md). The M7 selection
+policy is versioned by `configs/selection.yaml`; changing the weights, the margin or
+the robustness floors requires a new audited run, not an in-place edit.
 
 **Note for the next milestone:** the synthetic data is generated per-window; group
 splits by `scenario_name` can place all anomalies in one fold (the tooling warns but
 does not hide this). Choose the split strategy deliberately and consider a
 scenario-mixed or time-based split for detection experiments. The `random` strategy is
-the one used for the headline numbers.
+the one used for the headline numbers. M7 re-ran the audit on the `random` split
+only — the time-based and group-based splits have **not** been re-audited and are
+the first thing the next milestone should do.
