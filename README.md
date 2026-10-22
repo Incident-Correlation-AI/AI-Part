@@ -20,6 +20,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - **Milestone 5** — robustness, drift, and realistic validation: scenario testing with selected M3 model (no retraining), false-alert/miss analysis ([`MILESTONE_5_REPORT.md`](MILESTONE_5_REPORT.md)).
 - **Milestone 6** — stable ML inference contract and integration boundary: a versioned, callable interface (feature window in → structured result out) for the downstream correlation/explanation teammate ([`docs/ml_inference_contract.md`](docs/ml_inference_contract.md), [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md), [`MILESTONE_6_REPORT.md`](MILESTONE_6_REPORT.md)).
 - **Milestone 7** — ML readiness audit and end-to-end local validation: root-caused and fixed the M4 test-leakage in the auto-picker, re-decided the model selection on **validation evidence only**, audited the threshold and abstention policy, and drove the real M1→M6 pipeline end to end ([`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md), [`MILESTONE_7_REPORT.md`](MILESTONE_7_REPORT.md)). **Verdict: `controlled demo only`.**
+- **Milestone 8** — integration boundary preparation: a **centralised** forwarding rule, an explicit unscored-result handler, explicit sink-failure handling, and a local integration harness + offline rehearsal against the real M1→M6 path ([`docs/INTEGRATION_BOUNDARY.md`](docs/INTEGRATION_BOUNDARY.md), [`MILESTONE_8_REPORT.md`](MILESTONE_8_REPORT.md)). The real downstream interface remains **pending**.
 
 ---
 
@@ -75,6 +76,11 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
   the threshold from validation data, audit the abstention/missingness behaviour, and
   drive the **real** raw-events → features → inference → downstream-sink path with
   deterministic scenario tests.
+- **(M8)** **Harden the integration boundary** for the downstream teammate: centralise
+  the forwarding rule so only a `scored` result can be forwarded, handle every unscored
+  status through an explicit handler, make sink failures explicit instead of silently
+  aborting a batch, and provide a local harness plus an offline rehearsal that
+  separates contract-routing success from ML detection success.
 
 **Does not (belongs to a later milestone or teammate)**
 
@@ -125,6 +131,10 @@ raw events (dicts / JSON)
         ▼  M7
  readiness_audit.py    validation-only selection → threshold audit → verdict
  e2e_runner.py         raw events → M1 → M6 → neutral sink ──► readiness report
+        │
+        ▼  M8
+ inference/contract.py route_result()  ── the one forwarding rule
+ integration_harness.py ──► correlation sink | unscored handler
 ```
 
 | Module | Responsibility |
@@ -182,6 +192,10 @@ raw events (dicts / JSON)
 | `src/anomaly_detector/e2e_runner.py` | **M7** drives the real M1 → M6 path into a neutral downstream sink. |
 | `scripts/run_readiness_audit.py` | **M7** Run the readiness audit. |
 | `docs/READINESS_AUDIT.md` | **M7** Audit design, M4 root cause, threshold findings, readiness verdict. |
+| `src/anomaly_detector/inference/contract.py` | **M8** also holds `route_result()` — the canonical forwarding rule. |
+| `src/anomaly_detector/integration_harness.py` | **M8** local harness: centralised routing, correlation sink, unscored handler, rehearsal. |
+| `scripts/run_integration_rehearsal.py` | **M8** Run the offline integration rehearsal. |
+| `docs/INTEGRATION_BOUNDARY.md` | **M8** Boundary design, ownership split, and what the teammate must still provide. |
 
 ---
 
@@ -337,6 +351,10 @@ python scripts/smoke_test_inference.py --all
 # --- Milestone 7: readiness audit ---------------------------------------------
 # (11) Validation-only selection, threshold/abstention audit, end-to-end pipeline
 python scripts/run_readiness_audit.py
+
+# --- Milestone 8: integration boundary ----------------------------------------
+# (12) Offline rehearsal of the ML -> downstream boundary
+python scripts/run_integration_rehearsal.py
 ```
 
 Outputs:
@@ -366,6 +384,8 @@ Outputs:
 | `artifacts/robustness/run_*/predictions/*` | **M5** per-scenario predictions |
 | `artifacts/readiness/run_*/reports/readiness_audit.{json,md}` | **M7** readiness audit (selection, threshold, e2e, verdict) |
 | `artifacts/readiness/run_*/readiness_manifest.json` | **M7** run metadata |
+| `artifacts/rehearsal/run_*/reports/rehearsal_report.{json,md}` | **M8** integration rehearsal (routing counts, per-scenario results) |
+| `artifacts/rehearsal/run_*/rehearsal_manifest.json` | **M8** rehearsal metadata |
 
 The M6 inference interface produces **no artifacts of its own** — it is an
 in-process interface over the M3 model artifact. Its contract lives in

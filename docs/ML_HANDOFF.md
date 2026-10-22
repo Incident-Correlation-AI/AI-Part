@@ -1,12 +1,30 @@
-# ML Component Handoff (Milestone 6)
+# ML Component Handoff (Milestone 6, updated in Milestone 8)
 
 **Audience:** the teammate who owns evidence correlation, incident
 explanation and root-cause assistance.
 **Scope:** how to call the ML anomaly-detection component — nothing else.
 
 The full, normative contract lives in
-[`ml_inference_contract.md`](ml_inference_contract.md). This document is the
+[`ml_inference_contract.md`](ml_inference_contract.md). The **boundary**
+between the two components lives in
+[`INTEGRATION_BOUNDARY.md`](INTEGRATION_BOUNDARY.md). This document is the
 short version: what to call, what you get back, and what you must handle.
+
+> **Milestone 8 update.** The forwarding rule is now **centralised** in
+> `route_result()`, every unscored status is handled through an explicit
+> handler, sink failures are recorded instead of silently aborting a batch,
+> and a local integration harness (`IntegrationHarness`) is available. See
+> §8 below for what is still needed from you.
+
+---
+
+## 0. Read these first
+
+| Order | File | Why |
+|---|---|---|
+| 1 | [`ml_inference_contract.md`](ml_inference_contract.md) | The canonical request/result contract. |
+| 2 | [`INTEGRATION_BOUNDARY.md`](INTEGRATION_BOUNDARY.md) | The boundary, routing rule, ownership split. |
+| 3 | **This file** | The quick start and checklist. |
 
 ---
 
@@ -24,9 +42,11 @@ short version: what to call, what you get back, and what you must handle.
 from anomaly_detector.inference import (
     load_detector,          # -> AnomalyDetector   (load once, reuse)
     FeatureWindowRequest,   # -> input object
+    InferenceResult,         # -> output object
     InferenceStatus,        # -> status enum
     ReasonCode,             # -> reason-code enum
-    EvidenceCorrelationAdapter,  # optional: reference boundary adapter
+    route_result,           # -> the canonical forwarding rule
+    is_forwardable,         # -> bool convenience
 )
 ```
 
@@ -36,6 +56,25 @@ from anomaly_detector.inference import (
 | `detector.score_window(request) -> InferenceResult` | Validate and score one window. | Never for data problems — they come back as a status. Raises `TypeError` only if you pass the wrong Python type. |
 | `detector.score_windows(requests) -> list[InferenceResult]` | Batch. One result per input, same order. | Same rule; per-row failures are reported per row. |
 | `detector.contract() -> dict` | Versions, feature list, threshold, score direction. | No. |
+| `route_result(result) -> RoutingDecision` | **The one place** that decides whether a result may be forwarded. | No. Never raises. |
+
+### The recommended pattern (harness)
+
+```python
+from anomaly_detector.integration_harness import IntegrationHarness
+
+harness = IntegrationHarness()             # loads the model once per session
+outcome = harness.route_windows(requests)  # routes each outcome
+
+for scored in outcome.scored:               # only 'scored' results arrive here
+    correlate(window_id=scored.window_id, score=scored.raw_score)
+
+for record in harness.unscored.records:     # every other outcome, with its status
+    record_unknown(record.window_id, record.status, record.reason)
+```
+
+The harness applies the same canonical rule, so you cannot accidentally
+implement a subtly different check.
 
 ---
 
@@ -126,6 +165,17 @@ print(result.status.value, result.raw_score, result.is_anomaly)
 | `invalid_input` | Fix the producer (type/shape/boundary bug). | Do not retry blindly. |
 | `model_unavailable` | Raise an operational alert; the deployment is broken. | Do not fall back to "normal". |
 | `inference_error` | Log and escalate. | Do not swallow it or retry in a tight loop. |
+| `unknown` (malformed result) | Treat as a producer/contract bug. | Do not treat as normal. |
+
+### Sink failures (your component is the sink)
+
+If *your* component raises while accepting a scored window:
+
+* in a batch, the harness records it in `outcome.sink_failures`, the window is
+  **not** in the forwarded list, and the rest of the batch continues;
+* for a single window, `handle_window()` raises `SinkDeliveryError`.
+
+Either way it is never reported as a successful delivery.
 
 ---
 
@@ -135,30 +185,55 @@ print(result.status.value, result.raw_score, result.is_anomaly)
 - [ ] `load_detector()` once at start-up; reuse the object.
 - [ ] Use the project `sample_key` as `window_id`.
 - [ ] Branch on `status` first, `reason_code` second, `is_anomaly` last.
-- [ ] Forward only `scored` results.
+- [ ] Forward only `scored` results — use `route_result()` or the harness, do
+      not re-implement the check.
 - [ ] Keep the raw score and threshold separate; never re-threshold.
 - [ ] Never render `raw_score` as a probability or percentage.
 - [ ] Count non-`scored` statuses separately — they are different problems.
 - [ ] Never retrain or re-threshold from the inference component.
 - [ ] Do not expect evidence, correlation or explanations from this call.
+- [ ] Treat a sink failure as a failure — it is recorded, not swallowed.
 
 ---
 
-## 7. How to verify your integration
+## 7. Verified commands
+
+Every command below was run and passed:
 
 ```bash
-pytest tests/test_inference_contract.py -v      # contract + failure modes
-pytest tests/test_inference_integration.py -v   # boundary + end to end
-python scripts/smoke_test_inference.py           # single window
-python scripts/smoke_test_inference.py --all     # whole test split
+python -m pytest tests/test_integration_boundary.py -v   # 35 passed
+python -m pytest tests/ -q                               # 324 passed
+python scripts/run_integration_rehearsal.py              # local rehearsal
+python scripts/smoke_test_inference.py                  # M6 smoke test
+python scripts/run_readiness_audit.py                   # M7 readiness audit
 ```
 
-The smoke test prints the full structured result and the downstream
-branching pattern.
+If the package is not installed, prefix with `PYTHONPATH=src`.
 
 ---
 
-## 8. What the component does not prove
+## 8. What is still needed from you (Milestone 8)
+
+The harness is deliberately generic so that it does not guess at your
+architecture. Before the real adapter is written, these need agreeing:
+
+| # | Question | Why it matters |
+|---|---|---|
+| 1 | **Accepted input** — is the whole `InferenceResult` acceptable, or a subset / a different shape? | Determines what the adapter must map. |
+| 2 | **Desired output** — what does your component return, and does it need anything back? | The current `DownstreamSink.handle_scored_window` returns `None`. |
+| 3 | **Sync or async** — may the call block, or must the ML component hand off and return? | Decides whether the sink is called inline or via a queue. |
+| 4 | **Error handling** — what should happen when your component fails? Retry? Drop? Escalate? | The harness currently records the failure and continues the batch. |
+| 5 | **Duplicate semantics** — is one result per `window_id` enough, or is cross-batch deduplication required? | Today only within-batch duplicates are rejected. |
+| 6 | **Required provenance** — is the set in [`INTEGRATION_BOUNDARY.md` §8](INTEGRATION_BOUNDARY.md) sufficient? | Missing provenance would need a contract version bump. |
+| 7 | **Persistence and retries** — who stores the result, who retries, who owns the queue? | Currently nobody; the harness is in-memory only. |
+| 8 | **Volume and latency expectations** — is a batch expected, and what latency budget applies? | Affects whether batching is needed. |
+
+Until these are answered, the harness stays neutral and the real downstream
+interface remains **explicitly pending**.
+
+---
+
+## 9. What the component does not prove
 
 The model was trained and validated on **synthetic** data. A flagged window
 is a *lead for investigation*, not proof of an attack, and the score is a
@@ -167,5 +242,9 @@ detector is over-sensitive to legitimate distribution shifts and to missing
 telemetry — check `data_quality.imputed_features` before trusting a score
 from a degraded window.
 
+Milestone 7's readiness verdict stands: **`controlled demo only`**.
+
 Full details, including the exact behaviour matrix and versioning rules:
 [`ml_inference_contract.md`](ml_inference_contract.md).
+The boundary, ownership split and exception behaviour:
+[`INTEGRATION_BOUNDARY.md`](INTEGRATION_BOUNDARY.md).
