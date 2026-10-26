@@ -34,7 +34,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 #: Version of *this* request/result contract.  Bump the minor version for
 #: additive, backward-compatible changes and the major version for
 #: incompatible changes (removed/renamed fields, changed semantics).
-CONTRACT_VERSION = "1.0.0"
+#:
+#: 1.1.0 (network extension) adds telemetry-specific reason codes and the
+#: ``network-features-v1`` feature-schema identifier.  No field was removed,
+#: renamed or given a different meaning; a ``1.0.0`` result remains valid.
+CONTRACT_VERSION = "1.1.0"
 
 #: Identifier of the feature schema (the ordered allowlist) the contract
 #: speaks.  It matches the feature list recorded in the model manifest.
@@ -98,6 +102,10 @@ class ReasonCode(str, Enum):
     MODEL_MANIFEST_MISMATCH = "model_manifest_mismatch"
     MODEL_UNAVAILABLE = "model_unavailable"
     INFERENCE_FAILED = "inference_failed"
+    # --- 1.1.0 network/telemetry extension (additive) --------------------
+    NO_EVENTS = "no_events"
+    INSUFFICIENT_COVERAGE = "insufficient_coverage"
+    TELEMETRY_QUALITY = "telemetry_quality"
 
 
 # ---------------------------------------------------------------------------

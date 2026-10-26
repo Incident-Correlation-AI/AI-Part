@@ -178,3 +178,85 @@ def baseline_splits(tmp_path, baseline_config):
         features, labels, metadata = _make_baseline_split(n_rows, n_anomalies, 0)
         _write_split(root, name, features, labels, metadata)
     return root
+
+
+# ---------------------------------------------------------------------------
+# Network extension fixtures (Milestone 7)
+# ---------------------------------------------------------------------------
+
+NETWORK_TEST_SEED = 42
+NETWORK_TEST_RUNS = 3
+
+
+@pytest.fixture(scope="session")
+def network_simulation():
+    """One deterministic, 3-run simulator dataset shared by the network tests."""
+    from anomaly_detector.network.simulator import SimulatorConfig, simulate
+
+    return simulate(
+        SimulatorConfig(
+            seed=NETWORK_TEST_SEED,
+            run_count=NETWORK_TEST_RUNS,
+            run_minutes=90,
+            window_size_minutes=1,
+        )
+    )
+
+
+@pytest.fixture(scope="session")
+def network_parsed(network_simulation):
+    """Canonical LAD events parsed with quality bookkeeping."""
+    from anomaly_detector.network.lad_adapter import parse_lad_events
+
+    return parse_lad_events(network_simulation.events)
+
+
+@pytest.fixture(scope="session")
+def network_windows(network_simulation, network_parsed):
+    """Aligned ``network-features-v1`` windows and evaluation labels."""
+    from anomaly_detector.network.features import (
+        build_network_windows,
+        join_windows_with_labels,
+    )
+
+    grid = {}
+    for label in network_simulation.labels:
+        grid.setdefault((label.host_id, label.service), []).append(label.window_start)
+    grid = {key: sorted(set(starts)) for key, starts in grid.items()}
+
+    windows = build_network_windows(
+        network_parsed.events,
+        network_parsed.quality_by_window(1),
+        window_size_minutes=1,
+        rolling_windows=30,
+        rolling_min_history=5,
+        window_grid=grid,
+    )
+    aligned_windows, aligned_labels, missing = join_windows_with_labels(
+        windows, network_simulation.labels
+    )
+    return aligned_windows, aligned_labels, missing
+
+
+@pytest.fixture(scope="session")
+def network_pipeline_run(tmp_path_factory):
+    """Run the full pipeline once on three runs, into a temporary directory."""
+    from anomaly_detector.network.config import NetworkConfig
+    from anomaly_detector.network.pipeline import run_network_pipeline
+
+    root = tmp_path_factory.mktemp("network-pipeline")
+    cfg = NetworkConfig()
+    cfg.simulator.seed = NETWORK_TEST_SEED
+    cfg.simulator.run_count = NETWORK_TEST_RUNS
+    cfg.simulator.run_minutes = 90
+    cfg.model.n_estimators = 30
+    cfg.model.max_samples = 64
+    cfg.paths.update({
+        "synthetic_dir": str(root / "synthetic"),
+        "splits_dir": str(root / "splits"),
+        "output_dir": str(root / "artifacts"),
+        "model_dir": str(root / "artifacts" / "model"),
+        "reports_dir": str(root / "artifacts" / "reports"),
+    })
+    result = run_network_pipeline(cfg)
+    return result, cfg

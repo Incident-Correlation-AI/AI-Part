@@ -32,6 +32,7 @@ class EventType(str, Enum):
     """Documented event categories used by the feature set."""
     HTTP_REQUEST = "http_request"
     AUTH_FAILURE = "auth_failure"
+    AUTH_SUCCESS = "auth_success"
     SERVICE_RESTART = "service_restart"
     SYSTEM_EVENT = "system_event"
     DATABASE_QUERY = "database_query"

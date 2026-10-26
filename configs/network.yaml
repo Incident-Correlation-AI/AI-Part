@@ -1,0 +1,104 @@
+# Network / service-log anomaly detection configuration.
+#
+# Every value that influences a result lives here.  Paths are relative to the
+# repository root.  Nothing in this file contacts a network, a cloud service or
+# a production host.
+
+simulator:
+  seed: 42
+  run_count: 10              # >= 3: train/validation/test need distinct runs
+  run_minutes: 90            # the scenario schedule is exactly 90 minutes
+  window_size_minutes: 1
+  base_http_per_minute: 24
+  base_auth_per_minute: 10
+  base_db_per_minute: 24
+  inject_malformed: true     # duplicate/out-of-order/malformed telemetry scenarios
+  max_events: 250000         # hard upper bound; the run is marked truncated if hit
+  start_time: "2026-01-01T00:00:00+00:00"
+
+rules:
+  # Causal rolling history (same host/service only; the current window is not
+  # part of its own baseline).
+  rolling_windows: 30
+  rolling_min_history: 5
+  min_window_events: 5       # below this a window is insufficient_data
+
+  # HTTP 5xx rule.  All rules need a minimum volume so one failure on an idle
+  # service cannot become a high-severity incident.
+  http_5xx_min_requests: 20
+  http_5xx_min_count: 3
+  http_5xx_ratio_threshold: 0.05
+  http_5xx_strong_ratio: 0.20
+  http_5xx_delta_threshold: 0.05
+
+  # Database timeout / connection-failure rules.
+  db_min_events: 8
+  db_timeout_ratio_threshold: 0.05
+  db_timeout_strong_ratio: 0.20
+  db_connection_failure_ratio_threshold: 0.02
+  db_connection_failure_strong_ratio: 0.10
+
+  # Authentication-failure burst rules.
+  auth_min_events: 10
+  auth_min_failures: 8
+  auth_failure_ratio_threshold: 0.50
+  auth_failure_strong_ratio: 0.80
+  auth_distinct_source_threshold: 8
+
+  # Latency rule (relative to this service's recent p95).
+  latency_min_samples: 20
+  latency_p95_ratio_threshold: 2.0
+  latency_p95_strong_ratio: 4.0
+  latency_p95_absolute_floor_ms: 50.0
+
+  # Restart allowance and transparent risk aggregation.
+  max_routine_restarts: 1
+  weak_weight: 0.5
+  strong_weight: 1.0
+  decision_threshold: 1.0
+  high_severity_threshold: 2.0
+
+model:
+  n_estimators: 200
+  max_samples: 256
+  contamination: "auto"
+  random_state: 42
+  n_jobs: 2
+  bootstrap: false
+
+threshold:
+  # Selected on validation data only.  The test split is refused by the
+  # thresholding module.
+  method: validation_f1
+  min_precision: 0.5
+  min_recall: 0.5
+  fallback_method: train_quantile
+  fallback_quantile: 0.01
+
+split:
+  strategies: [time, group]
+  ratios:
+    train: 0.6
+    validation: 0.2
+    test: 0.2
+
+paths:
+  synthetic_dir: data/synthetic/network
+  splits_dir: data/processed/network_splits
+  output_dir: artifacts/network
+  model_dir: artifacts/network/model
+  reports_dir: artifacts/network/reports
+  existing_model: artifacts/baseline/model/model.joblib
+  existing_manifest: artifacts/baseline/model/manifest.json
+
+llm:
+  # Disabled by default.  The offline mock provider is deterministic and makes
+  # no network request.  Enabling the http provider sends only the bounded
+  # evidence bundle; the API key is read from the named environment variable
+  # and is never written to disk or logs.
+  enabled: false
+  provider: mock              # mock | http
+  endpoint: ""
+  model: ""
+  api_key_env: LAD_LLM_API_KEY
+  timeout_seconds: 20.0
