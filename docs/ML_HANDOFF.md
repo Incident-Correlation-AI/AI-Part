@@ -1,4 +1,4 @@
-# ML Component Handoff (Milestone 6, updated in Milestone 9)
+# ML Component Handoff (Milestone 6, updated in Milestones 9–10)
 
 **Audience:** the teammate who owns evidence correlation, incident
 explanation and root-cause assistance.
@@ -23,6 +23,14 @@ short version: what to call, what you get back, and what you must handle.
 > (`no_events`, `insufficient_coverage`, `telemetry_quality`). Contract version
 > is now `1.1.0`. If you only consume `features-v1`, nothing changes. See §9.
 
+> **Milestone 10 update.** The evidence-correlation / incident-draft boundary
+> now exists in `anomaly_detector.correlation`. It reuses the real upstream
+> `correlate_anomalies()` implementation, consumes only `scored` results, and
+> returns incidents that validate against the canonical LAD incident schema.
+> **Upstream has no LLM**; the optional explanation layer is the existing
+> `network.llm` adapter. See
+> [`ml_llm_integration.md`](ml_llm_integration.md).
+
 ---
 
 ## 0. Read these first
@@ -33,6 +41,7 @@ short version: what to call, what you get back, and what you must handle.
 | 2 | [`INTEGRATION_BOUNDARY.md`](INTEGRATION_BOUNDARY.md) | The boundary, routing rule, ownership split. |
 | 3 | **This file** | The quick start and checklist. |
 | 4 | [`ml_network_integration.md`](ml_network_integration.md) | The additive network detector, if you consume network windows. |
+| 5 | [`ml_llm_integration.md`](ml_llm_integration.md) | The evidence-correlation / incident-draft adapter and its status semantics. |
 
 ---
 
@@ -307,6 +316,11 @@ deterministic simulator that repeats one scenario schedule; they validate the
 pipeline, not production generalisation. The benign high-traffic scenario has a
 0.25 false-positive rate in the time test split, so volume-driven alerts should
 be expected and must be tuned before operational use.
+
+M10's correlation is deterministic service + time proximity. It establishes
+association, not causation, and never turns a flag into proof of an attack. Its
+incident drafts are valid against the canonical schema, but no live LLM provider
+and no production incident store were exercised.
 
 Full details, including the exact behaviour matrix and versioning rules:
 [`ml_inference_contract.md`](ml_inference_contract.md).

@@ -1,9 +1,10 @@
 """Milestone 8 — local integration harness for the ML → downstream boundary.
 
-The downstream evidence-correlation / incident-explanation component is being
-built by another teammate and is **not available yet**. This module prepares
-and tests the boundary without implementing that component or depending on its
-code.
+The downstream evidence-correlation / incident-explanation component was being
+built by another teammate when this harness was written. Milestone 10 now
+provides it in ``anomaly_detector.correlation`` (see
+``docs/ml_llm_integration.md``); this module remains the M8 forwarding harness
+and deliberately does not implement correlation itself.
 
 What this harness is
 --------------------

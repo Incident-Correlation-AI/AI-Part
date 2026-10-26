@@ -83,6 +83,18 @@ missing token. The token value was not read or recorded.
 extension therefore does **not** claim to match it. The blocker is carried
 forward in §8 instead of being silently replaced by a different repository.
 
+### Update — M10 (2026-10-26)
+
+The blocker above was resolved through SSH access after M9. The repository was
+cloned read-only at `b155a05c00741cc5f129610d2d90af0d18ca48ed` and fully
+inspected. Key result: **it contains no LLM**. It provides a rule-based
+`correlator.py` (`correlate_anomalies`), MAD detection and upstream incident
+construction. M10 vendors only `correlator.py` and maps its groups into the
+canonical LAD incident shape; the optional explanation layer is this
+repository's existing `network.llm` adapter. See
+[`ml_llm_integration_reconnaissance.md`](ml_llm_integration_reconnaissance.md)
+for the full findings and the premise mismatch.
+
 ---
 
 ## 4. Accessible LAD repositories — inspected
@@ -234,10 +246,10 @@ as an upstream unknown rather than presented as an existing integration.
 
 | # | Item | Why it remains open |
 |---|---|---|
-| 1 | Exact upstream `kalmak889900/automated-log-anomaly-detector` code | Repository inaccessible (§3). |
-| 2 | A real upstream LLM/explanation contract | No such component exists in the accessible repositories (§4.4). |
+| 1 | Exact upstream `kalmak889900/automated-log-anomaly-detector` code | **Resolved in M10:** accessible via SSH; inspected at `b155a05`. See [`ml_llm_integration_reconnaissance.md`](ml_llm_integration_reconnaissance.md). |
+| 2 | A real upstream LLM/explanation contract | **Resolved as a premise mismatch:** upstream has no LLM. M10 reuses the local optional explanation adapter. |
 | 3 | Real production log replay | Only deterministic synthetic data was available; no production telemetry was used. |
-| 4 | Destination repository and branch for publication | No Git remote is configured; publication requires an explicit decision. |
+| 4 | Destination repository and branch for publication | **Resolved:** `Incident-Correlation-AI/AI-Part`, branch `main`. |
 | 5 | Posting an integration comment to Abel | Requires an unambiguous identity and target URL; otherwise the draft stays local. |
 
 ---

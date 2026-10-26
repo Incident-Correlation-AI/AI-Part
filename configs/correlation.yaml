@@ -1,0 +1,43 @@
+# Evidence-correlation / incident-draft adapter configuration.
+#
+# This component reuses the upstream rule-based correlator.  There is no
+# upstream LLM; the optional explanation adapter below is the existing local
+# network.llm adapter.  Explanations are disabled by default and never change
+# the ML decision.
+#
+# Environment variables override this file:
+#   LAD_CORRELATION_CONFIG
+#   LAD_CORRELATION_WINDOW_SECONDS
+#   LAD_CORRELATION_REQUIRE_EVENT_EVIDENCE
+#   LAD_CORRELATION_MAX_EVENTS_PER_WINDOW
+#   LAD_CORRELATION_MAX_EVENTS_PER_INCIDENT
+#   LAD_CORRELATION_MAX_REDACTED_REFS
+#   LAD_CORRELATION_MAX_LLM_HYPOTHESES
+#   LAD_CORRELATION_MAX_DIAGNOSTIC_CHECKS
+#   LAD_CORRELATION_EXPLAIN
+#   LAD_CORRELATION_INCLUDE_LLM_CHECKS
+#   LAD_CORRELATION_EXPLANATION_FALLBACK
+#   LAD_LLM_PROVIDER / LAD_LLM_ENDPOINT / LAD_LLM_MODEL
+#   LAD_LLM_API_KEY_ENV / LAD_LLM_TIMEOUT_SECONDS
+#
+# Secret values are never placed here.  The HTTP provider reads its key from
+# the environment variable named by llm.api_key_env at call time.
+
+correlation:
+  window_seconds: 120
+  require_supporting_events: true
+  max_supporting_events_per_window: 100
+  max_events_per_incident: 200
+  max_redacted_refs_per_incident: 50
+  max_llm_hypotheses_per_incident: 3
+  max_diagnostic_checks_per_incident: 8
+  explain: false
+  include_llm_checks: true
+  explanation_fallback: true
+
+llm:
+  provider: mock              # none | mock | http
+  endpoint: ""                # required for http, e.g. http://127.0.0.1:8000/v1/chat/completions
+  model: ""
+  api_key_env: LAD_LLM_API_KEY
+  timeout_seconds: 20.0

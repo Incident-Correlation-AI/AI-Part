@@ -455,11 +455,11 @@ binaries or synthetic data.
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Exact upstream `kalmak889900/automated-log-anomaly-detector` code | Inaccessible (`clone` auth failure, API 404, `gh` cannot resolve). Documented in [`ml_network_reconnaissance.md`](ml_network_reconnaissance.md) §3. |
-| 2 | A real upstream LLM/explanation contract | No such component exists in the accessible LAD repositories. The adapter is new and optional. |
+| 1 | Exact upstream `kalmak889900/automated-log-anomaly-detector` code | **Resolved in M10:** accessible via SSH, inspected at `b155a05`; contains rule-based correlation, no LLM. |
+| 2 | A real upstream LLM/explanation contract | **Resolved as a premise mismatch:** upstream has no LLM. The local optional adapter is the LLM layer. |
 | 3 | Real production replay | Not performed. All measured figures are synthetic. |
-| 4 | Service-level integration | Not implemented here; this is an in-process boundary only. |
-| 5 | Publication repository and branch | No Git remote is configured; publication requires an explicit decision. |
+| 4 | Service-level integration | The M10 adapter is in-process; persistence/API remains with the LAD workstream. See [`ml_llm_integration.md`](ml_llm_integration.md). |
+| 5 | Publication repository and branch | **Resolved:** `Incident-Correlation-AI/AI-Part`, branch `main`. |
 | 6 | Abel integration comment | Drafted but not posted; target identity/URL must be confirmed. |
 
 ---

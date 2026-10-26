@@ -1,20 +1,22 @@
-# ML Anomaly Detector — Data Pipeline, Baseline Detectors & Inference Interface (Milestones 1–9)
+# ML Anomaly Detector — Data Pipeline, Baseline Detectors, Inference & Incident Drafts (Milestones 1–10)
 
 A standalone **data-preparation and anomaly-detection** component for an Automated
 Log Anomaly Detector. It turns structured log events into trustworthy numerical
 feature windows (Milestone 1), validates that data, audits it for leakage and
 produces reproducible, aligned, training-ready datasets (Milestone 2), trains and
 evaluates an **Isolation Forest** baseline over those windows (Milestones 3–5),
-exposes a stable in-process inference interface (Milestones 6–8), and adds a
-separate **network/service-log detector** with its own leak-safe feature schema
-and deterministic local simulator (Milestone 9).
+exposes a stable in-process inference interface (Milestones 6–8), adds a separate
+**network/service-log detector** with its own leak-safe feature schema and
+deterministic local simulator (Milestone 9), and (Milestone 10) connects scored
+results to the upstream **rule-based evidence correlator** and produces
+schema-valid **incident drafts** with an optional grounded explanation layer.
 
-> **Scope:** this repository covers data preparation and **detection/scoring
-> only**. There is **no** evidence correlation, root-cause reasoning, incident
-> narrative, API, dashboard or cloud code here. A flagged window is a lead for
-> investigation, not proof of an attack — that reasoning layer belongs to a
-> separate workstream. The M9 explanation adapter is optional, disabled by
-> default and never changes a decision.
+> **Scope:** this repository covers data preparation, **detection/scoring** and
+> the **incident-draft boundary**. Correlation is deterministic (service + time
+> proximity); it is association, not proof of root cause. There is **no** LLM in
+> the upstream correlator — the only LLM layer is the optional, disabled-by-
+> default explanation adapter. There is no API, dashboard, alert delivery or
+> cloud code here; those belong to the other LAD workstreams.
 
 - **Milestone 1** — data pipeline foundation (ingest → validate → window → features
   → synthetic data → public-dataset adapter path).
@@ -24,8 +26,9 @@ and deterministic local simulator (Milestone 9).
 - **Milestone 5** — robustness, drift, and realistic validation: scenario testing with selected M3 model (no retraining), false-alert/miss analysis ([`MILESTONE_5_REPORT.md`](MILESTONE_5_REPORT.md)).
 - **Milestone 6** — stable ML inference contract and integration boundary: a versioned, callable interface (feature window in → structured result out) for the downstream correlation/explanation teammate ([`docs/ml_inference_contract.md`](docs/ml_inference_contract.md), [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md), [`MILESTONE_6_REPORT.md`](MILESTONE_6_REPORT.md)).
 - **Milestone 7** — ML readiness audit and end-to-end local validation: root-caused and fixed the M4 test-leakage in the auto-picker, re-decided the model selection on **validation evidence only**, audited the threshold and abstention policy, and drove the real M1→M6 pipeline end to end ([`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md), [`MILESTONE_7_REPORT.md`](MILESTONE_7_REPORT.md)). **Verdict: `controlled demo only`.**
-- **Milestone 8** — integration boundary preparation: a **centralised** forwarding rule, an explicit unscored-result handler, explicit sink-failure handling, and a local integration harness + offline rehearsal against the real M1→M6 path ([`docs/INTEGRATION_BOUNDARY.md`](docs/INTEGRATION_BOUNDARY.md), [`MILESTONE_8_REPORT.md`](MILESTONE_8_REPORT.md)). The real downstream interface remains **pending**.
+- **Milestone 8** — integration boundary preparation: a **centralised** forwarding rule, an explicit unscored-result handler, explicit sink-failure handling, and a local integration harness + offline rehearsal against the real M1→M6 path ([`docs/INTEGRATION_BOUNDARY.md`](docs/INTEGRATION_BOUNDARY.md), [`MILESTONE_8_REPORT.md`](MILESTONE_8_REPORT.md)).
 - **Milestone 9 — network/service-log extension** — an additive, integration-ready detector for HTTP 5xx spikes, DB timeouts/latency, auth-failure bursts and benign operational shifts: a deterministic local LAD-envelope simulator with a separate label channel, a leak-safe `network-features-v1` schema (39 columns), a transparent rule/MAD baseline, an Isolation Forest, time and group splits, status-aware evaluation, and an optional evidence-grounded explanation adapter ([`docs/ml_network_reconnaissance.md`](docs/ml_network_reconnaissance.md), [`docs/ml_network_features.md`](docs/ml_network_features.md), [`docs/ml_network_evaluation.md`](docs/ml_network_evaluation.md), [`docs/ml_network_integration.md`](docs/ml_network_integration.md)).
+- **Milestone 10 — evidence correlation / incident drafts** — vendors the real upstream `correlate_anomalies()` implementation, maps its groups into the canonical LAD incident schema, preserves every ML score/status/timestamp/model version, validates and redacts event references, and reuses the optional grounded explanation adapter ([`docs/ml_llm_integration_reconnaissance.md`](docs/ml_llm_integration_reconnaissance.md), [`docs/ml_llm_integration.md`](docs/ml_llm_integration.md)). **The upstream repository contains no LLM**; this is documented rather than fabricated.
 
 ---
 
@@ -92,16 +95,22 @@ and deterministic local simulator (Milestone 9).
   a transparent rule/MAD baseline and an Isolation Forest, chronological and
   run-disjoint splits, status-aware evaluation, and an optional evidence-grounded
   explanation adapter. The existing `features-v1` contract is unchanged.
+- **(M10)** **Correlate scored anomalies and draft incidents** by reusing the real
+  upstream `correlate_anomalies()` implementation, validating every ML result
+  through the canonical routing rule, redacting event references, preserving
+  scores/timestamps/model metadata, and producing drafts that validate against
+  `LAD/contracts/schemas/incident.schema.json`. Explanations remain optional.
 
 **Does not (belongs to a later milestone or teammate)**
 
-- No evidence correlation, incident reasoning or root-cause hypotheses. The network
-  extension includes an optional explanation adapter, but it only restates scored
+- No LLM-based correlation. Upstream has no LLM; correlation is deterministic
+  service + time proximity. The optional explanation adapter only restates scored
   evidence, is disabled by default and never changes a decision.
-- No API, web server, dashboard, cloud SDK, or AWS code. The network extension
-  includes an optional explanation adapter, but it is **disabled by default** and
-  makes no external call unless explicitly configured; it never changes a
-  detection decision.
+- No root-cause proof from correlation. A temporal/identity group is association,
+  not causation, and incidents say so explicitly.
+- No API, web server, dashboard, cloud SDK, or AWS code. The explanation adapter
+  makes no external call unless explicitly configured.
+- No incident persistence or acknowledgement/resolution lifecycle.
 - No alert delivery, response automation, or remediation.
 - No automatic online learning, retraining, or threshold adjustment at inference time.
 - No production-readiness or SLA claim: the M7 verdict is `controlled demo only`.
@@ -539,8 +548,9 @@ and the teammate-facing [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md). Summary:
   its own result. Duplicate `window_id`s within a batch are rejected.
 - **Integration boundary only.** `inference/adapter.py` defines a neutral
   `DownstreamSink` protocol and a reference adapter that forwards *only* scored
-  results. No evidence correlation, no explanation, no alerting, no remediation,
-  no web framework.
+  results. M8 itself adds no evidence correlation, explanation, alerting,
+  remediation or web framework; M10 adds the evidence-correlation/draft boundary
+  as a separate package (`anomaly_detector.correlation`).
 
 ```python
 from anomaly_detector.inference import InferenceStatus, load_detector
@@ -602,6 +612,42 @@ python scripts/run_network_pipeline.py --config configs/network.yaml
 
 ---
 
+## 8f. Milestone 10 — evidence correlation and incident drafts
+
+Full details live in
+[`docs/ml_llm_integration_reconnaissance.md`](docs/ml_llm_integration_reconnaissance.md)
+and [`docs/ml_llm_integration.md`](docs/ml_llm_integration.md). Summary:
+
+- **Real upstream correlation, not a reimplementation.** `correlate_anomalies()`
+  from `kalmak889900/automated-log-anomaly-detector@b155a05` is vendored verbatim
+  with provenance. It groups by service and time proximity.
+- **No upstream LLM exists.** The integration prompt's premise was checked against
+  every upstream module; there is no prompt, provider, redaction or LLM test. The
+  optional explanation layer is this repository's existing grounded adapter.
+- **Canonical incident output.** Upstream groups are mapped into the LAD
+  `incident.schema.json` shape: typed `evidence`, separate `hypotheses`,
+  non-executing `diagnostic_checks`, `affected_entities`, model versions and
+  audit. The upstream incident shape is deliberately not reused.
+- **Explicit statuses.** Only `scored` results can become candidates. `unscored`,
+  invalid, error, missing, duplicate and scored-but-not-flagged results are
+  preserved in separate outcome lists with their original reason codes.
+- **Redacted and bounded evidence.** Event IDs must be opaque and safe; optional
+  redacted pointers are validated; unsafe references quarantine the candidate;
+  all lists are bounded and truncation is recorded. Raw messages, headers,
+  cookies, tokens, emails and IP addresses are never accepted.
+- **LLM failure cannot erase an ML result.** Incidents are built from
+  deterministic evidence first; provider timeouts, 429s, malformed JSON and
+  grounding violations are recorded on the explanation entry.
+- **Validated against the real schema.** Tests load a byte-for-byte copy of the
+  canonical incident schema (hash recorded) and validate every draft.
+
+```bash
+python scripts/run_correlation_rehearsal.py
+python scripts/run_correlation_rehearsal.py --explain --limit 200
+```
+
+---
+
 ## 9. Tests
 
 ```bash
@@ -639,7 +685,13 @@ detection, PII removal, partial-quality records), the 39-column schema and
 zero-denominator semantics, causal rolling features, time/group split integrity,
 scenario coverage, status handling (empty, sparse, degraded, naive and malformed
 windows), model reload/reproducibility and the evidence-grounded explanation
-adapter. The full suite currently reports **375 passed**.
+adapter. Milestone 10 adds 36 offline tests covering upstream-correlator reuse,
+canonical incident-schema validity, field preservation, scored/unscored/invalid/
+error separation, duplicate and out-of-order handling, evidence redaction and
+bounds, unsafe identity rejection, configuration, mocked-provider orchestration,
+timeout/rate-limit/malformed-provider failures, diagnostic redaction, and a full
+simulated-events → model → evidence → mocked-LLM → validated-incident path. The
+full suite currently reports **411 passed**.
 
 ---
 
@@ -659,11 +711,12 @@ ml-anomaly-detector/
 ├── requirements.txt
 ├── .gitignore
 ├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml,
-│            robustness.yaml, selection.yaml, network.yaml}
+│            robustness.yaml, selection.yaml, network.yaml, correlation.yaml}
 ├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md,
 │        ml_inference_contract.md, ML_HANDOFF.md, READINESS_AUDIT.md,
 │        ml_network_reconnaissance.md, ml_network_features.md,
-│        ml_network_evaluation.md, ml_network_integration.md}
+│        ml_network_evaluation.md, ml_network_integration.md,
+│        ml_llm_integration_reconnaissance.md, ml_llm_integration.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -715,6 +768,13 @@ ml-anomaly-detector/
 │   │   ├── evaluation.py          # status-aware metrics
 │   │   ├── llm.py                 # optional evidence-grounded explanation
 │   │   └── pipeline.py            # end-to-end orchestration
+│   ├── correlation/               # M10 evidence correlation / incident drafts
+│   │   ├── __init__.py            # public API
+│   │   ├── config.py              # explicit config + environment overrides
+│   │   ├── evidence.py            # WindowEvidence, validation, redaction
+│   │   ├── incident.py            # upstream group → canonical incident draft
+│   │   ├── pipeline.py            # status routing, correlation, LLM orchestration
+│   │   └── upstream/              # vendored upstream correlator + provenance
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -730,8 +790,9 @@ ml-anomaly-detector/
 │   ├── smoke_test_inference.py    # M6
 │   ├── run_readiness_audit.py     # M7
 │   ├── run_network_simulator.py   # M9
-│   └── run_network_pipeline.py    # M9
-├── tests/ (incl. fixtures/hdfs_sample/)
+│   ├── run_network_pipeline.py    # M9
+│   └── run_correlation_rehearsal.py  # M10
+├── tests/ (incl. fixtures/hdfs_sample/ and fixtures/contracts/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
 
@@ -772,19 +833,31 @@ ml-anomaly-detector/
   has a 0.25 false-positive rate in the time test split. The rule baseline also beats
   the Isolation Forest on the clearest auth-burst pattern. See
   [`docs/ml_network_evaluation.md`](docs/ml_network_evaluation.md) §7.
+- **M10 correlation is association, not causation.** The upstream correlator uses
+  service identity and timestamp proximity only (120 s by default). It has no trace
+  or dependency graph, no quiet-period lifecycle and no reopening logic.
+- **The M9 feature windows do not retain event IDs.** Callers must supply a
+  `window_id → supporting event IDs` index; the adapter never invents references.
+- **Upstream has no LLM and no licence file.** The single vendored module is
+  documented with provenance; publication of this repository containing it still
+  needs owner/legal review.
+- **No live LLM/provider was contacted.** Timeout, rate-limit, malformed-response and
+  grounding failures are tested with injected transports and mock providers only.
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–9 stop here with a tested, documented data pipeline, a leakage-audited,
+Milestones 1–10 stop here with a tested, documented data pipeline, a leakage-audited,
 reproducible, training-ready dataset (features / labels / metadata kept separate,
 splits produced under three strategies), a reproducible Isolation Forest baseline, a
 fair comparison against a robust MAD baseline and LOF (novelty), a
 robustness/failure-mode analysis against controlled scenarios, a **stable, versioned
 inference interface** for the downstream correlation/explanation component, a
 **readiness audit** that root-caused and fixed the M4 test-leakage in the auto-picker
-and re-decided the model selection on validation evidence only, and (M9) an additive
+and re-decided the model selection on validation evidence only, (M9) an additive
 **network/service-log detector** with its own leak-safe feature schema, local
-simulator, transparent baseline, split discipline and optional explanation adapter.
+simulator, transparent baseline, split discipline and optional explanation adapter,
+and (M10) a **canonical incident-draft boundary** that reuses the real upstream
+correlator and validates its output against the LAD incident schema.
 
 M1–M5 artifacts are preserved; M4, M5 and M7 write unique outputs under
 `artifacts/comparison/`, `artifacts/robustness/` and `artifacts/readiness/`; M6
@@ -815,3 +888,11 @@ only — the **M3/M4 baseline** time-based and group-based splits have **not** b
 re-audited and remain the first thing the next milestone should do. M9 independently
 uses audited chronological (`time`) and run-disjoint (`group`) splits for the network
 extension, but that does not retro-audit the earlier baseline pipeline.
+
+M10 is an adapter, not a second detector or a second LLM. It vendors exactly one
+upstream module (`correlator.py`) with provenance, leaves every ML score, status,
+threshold, identifier, timestamp and model version intact, and returns incidents
+that validate against the canonical LAD schema. The next integration step is to
+call `EvidenceCorrelationPipeline.correlate()` from the LAD detection worker and
+persist its drafts through the existing incident store. See
+[`docs/ml_llm_integration.md`](docs/ml_llm_integration.md) §13.

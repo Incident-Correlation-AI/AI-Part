@@ -3,10 +3,13 @@
 **Purpose:** define exactly how the ML anomaly-detection component hands work
 to the downstream evidence-correlation / incident-explanation component.
 
-**Status of the downstream component:** it is being built by another teammate
-and is **not available yet**. This document and the harness in
-`src/anomaly_detector/integration_harness.py` prepare and test the boundary
-without implementing that component or depending on its code.
+**Status of the downstream component:** the M8 boundary below was written while
+the component was being built by another teammate. Milestone 10 now provides the
+compatible downstream implementation in
+`src/anomaly_detector/correlation/`; see
+[`ml_llm_integration.md`](ml_llm_integration.md). This document remains the
+description of the M6 → M8 forwarding rule and the harness in
+`src/anomaly_detector/integration_harness.py`.
 
 **The canonical contract remains
 [`ml_inference_contract.md`](ml_inference_contract.md).** This document
