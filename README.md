@@ -1,16 +1,20 @@
-# ML Anomaly Detector — Data Pipeline, Experiment Readiness & Baseline (Milestones 1–3)
+# ML Anomaly Detector — Data Pipeline, Baseline Detectors & Inference Interface (Milestones 1–9)
 
-A standalone **data-preparation and baseline-detection** component for an Automated
-Log Anomaly Detector. It turns structured log events into trustworthy numerical feature
-windows (Milestone 1), validates that data, audits it for leakage and produces
-reproducible, aligned, training-ready datasets (Milestone 2), and then trains, scores
-and evaluates a first **Isolation Forest** baseline over those validated windows
-(Milestone 3).
+A standalone **data-preparation and anomaly-detection** component for an Automated
+Log Anomaly Detector. It turns structured log events into trustworthy numerical
+feature windows (Milestone 1), validates that data, audits it for leakage and
+produces reproducible, aligned, training-ready datasets (Milestone 2), trains and
+evaluates an **Isolation Forest** baseline over those windows (Milestones 3–5),
+exposes a stable in-process inference interface (Milestones 6–8), and adds a
+separate **network/service-log detector** with its own leak-safe feature schema
+and deterministic local simulator (Milestone 9).
 
-> **Scope:** Milestones 1–3 cover data work and **detection/scoring only**. There is
-> **no** evidence correlation, root-cause reasoning, incident narrative, API,
-> dashboard or cloud code here. A flagged window is a lead for investigation, not
-> proof of an attack — that reasoning layer belongs to a separate workstream.
+> **Scope:** this repository covers data preparation and **detection/scoring
+> only**. There is **no** evidence correlation, root-cause reasoning, incident
+> narrative, API, dashboard or cloud code here. A flagged window is a lead for
+> investigation, not proof of an attack — that reasoning layer belongs to a
+> separate workstream. The M9 explanation adapter is optional, disabled by
+> default and never changes a decision.
 
 - **Milestone 1** — data pipeline foundation (ingest → validate → window → features
   → synthetic data → public-dataset adapter path).
@@ -21,6 +25,7 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
 - **Milestone 6** — stable ML inference contract and integration boundary: a versioned, callable interface (feature window in → structured result out) for the downstream correlation/explanation teammate ([`docs/ml_inference_contract.md`](docs/ml_inference_contract.md), [`docs/ML_HANDOFF.md`](docs/ML_HANDOFF.md), [`MILESTONE_6_REPORT.md`](MILESTONE_6_REPORT.md)).
 - **Milestone 7** — ML readiness audit and end-to-end local validation: root-caused and fixed the M4 test-leakage in the auto-picker, re-decided the model selection on **validation evidence only**, audited the threshold and abstention policy, and drove the real M1→M6 pipeline end to end ([`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md), [`MILESTONE_7_REPORT.md`](MILESTONE_7_REPORT.md)). **Verdict: `controlled demo only`.**
 - **Milestone 8** — integration boundary preparation: a **centralised** forwarding rule, an explicit unscored-result handler, explicit sink-failure handling, and a local integration harness + offline rehearsal against the real M1→M6 path ([`docs/INTEGRATION_BOUNDARY.md`](docs/INTEGRATION_BOUNDARY.md), [`MILESTONE_8_REPORT.md`](MILESTONE_8_REPORT.md)). The real downstream interface remains **pending**.
+- **Milestone 9 — network/service-log extension** — an additive, integration-ready detector for HTTP 5xx spikes, DB timeouts/latency, auth-failure bursts and benign operational shifts: a deterministic local LAD-envelope simulator with a separate label channel, a leak-safe `network-features-v1` schema (39 columns), a transparent rule/MAD baseline, an Isolation Forest, time and group splits, status-aware evaluation, and an optional evidence-grounded explanation adapter ([`docs/ml_network_reconnaissance.md`](docs/ml_network_reconnaissance.md), [`docs/ml_network_features.md`](docs/ml_network_features.md), [`docs/ml_network_evaluation.md`](docs/ml_network_evaluation.md), [`docs/ml_network_integration.md`](docs/ml_network_integration.md)).
 
 ---
 
@@ -81,11 +86,22 @@ and evaluates a first **Isolation Forest** baseline over those validated windows
   status through an explicit handler, make sink failures explicit instead of silently
   aborting a batch, and provide a local harness plus an offline rehearsal that
   separates contract-routing success from ML detection success.
+- **(M9)** **Detect network/service-log incidents** with an additive extension: a
+  deterministic local simulator that emits canonical LAD envelopes plus a separate
+  label channel, a leak-safe `network-features-v1` schema with causal rolling features,
+  a transparent rule/MAD baseline and an Isolation Forest, chronological and
+  run-disjoint splits, status-aware evaluation, and an optional evidence-grounded
+  explanation adapter. The existing `features-v1` contract is unchanged.
 
 **Does not (belongs to a later milestone or teammate)**
 
-- No evidence correlation, incident reasoning, root-cause hypotheses, or explanations.
-- No API, web server, dashboard, cloud SDK, external LLM, or AWS code.
+- No evidence correlation, incident reasoning or root-cause hypotheses. The network
+  extension includes an optional explanation adapter, but it only restates scored
+  evidence, is disabled by default and never changes a decision.
+- No API, web server, dashboard, cloud SDK, or AWS code. The network extension
+  includes an optional explanation adapter, but it is **disabled by default** and
+  makes no external call unless explicitly configured; it never changes a
+  detection decision.
 - No alert delivery, response automation, or remediation.
 - No automatic online learning, retraining, or threshold adjustment at inference time.
 - No production-readiness or SLA claim: the M7 verdict is `controlled demo only`.
@@ -355,6 +371,11 @@ python scripts/run_readiness_audit.py
 # --- Milestone 8: integration boundary ----------------------------------------
 # (12) Offline rehearsal of the ML -> downstream boundary
 python scripts/run_integration_rehearsal.py
+
+# --- Milestone 9: network / service-log extension ------------------------------
+# (13) Simulator only, or the full simulator -> features -> model -> evaluation run
+python scripts/run_network_simulator.py --config configs/network.yaml
+python scripts/run_network_pipeline.py --config configs/network.yaml
 ```
 
 Outputs:
@@ -386,6 +407,13 @@ Outputs:
 | `artifacts/readiness/run_*/readiness_manifest.json` | **M7** run metadata |
 | `artifacts/rehearsal/run_*/reports/rehearsal_report.{json,md}` | **M8** integration rehearsal (routing counts, per-scenario results) |
 | `artifacts/rehearsal/run_*/rehearsal_manifest.json` | **M8** rehearsal metadata |
+| `data/synthetic/network/events.jsonl` | **M9** canonical LAD envelopes (synthetic) |
+| `data/synthetic/network/labels.csv` | **M9** evaluation-only labels (separate channel) |
+| `artifacts/network/features.csv` | **M9** 39-column `network-features-v1` matrix |
+| `artifacts/network/metadata.csv`, `labels.csv` | **M9** window keys and aligned labels |
+| `artifacts/network/lad_parse_summary.json` | **M9** accepted/rejected/quality counts |
+| `artifacts/network/model/{model.joblib,manifest.json}` | **M9** deployed `time` model |
+| `artifacts/network/experiments/<strategy>/` | **M9** per-strategy model, predictions, threshold, metrics |
 
 The M6 inference interface produces **no artifacts of its own** — it is an
 in-process interface over the M3 model artifact. Its contract lives in
@@ -396,8 +424,10 @@ paths, empty-window behaviour), `configs/data_readiness.yaml` (Milestone 2 roles
 policy, splits and export paths), `configs/baseline.yaml` (Milestone 3 model
 parameters, feature allowlist, data policies, threshold rule and paths),
 `configs/comparison.yaml` (Milestone 4 predeclared criteria and candidates),
-`configs/robustness.yaml` (Milestone 5 scenarios) and `configs/selection.yaml`
-(Milestone 7 pre-declared validation-only selection policy). All paths are
+`configs/robustness.yaml` (Milestone 5 scenarios), `configs/selection.yaml`
+(Milestone 7 pre-declared validation-only selection policy) and
+`configs/network.yaml` (Milestone 9 simulator, rules, model, threshold, split
+strategies and the disabled-by-default explanation adapter). All paths are
 relative to the repo root.
 
 ---
@@ -526,6 +556,52 @@ else:
 
 ---
 
+## 8e. Milestone 9 — network / service-log anomaly detection
+
+Full details live in
+[`docs/ml_network_reconnaissance.md`](docs/ml_network_reconnaissance.md),
+[`docs/ml_network_features.md`](docs/ml_network_features.md),
+[`docs/ml_network_evaluation.md`](docs/ml_network_evaluation.md) and
+[`docs/ml_network_integration.md`](docs/ml_network_integration.md). Summary:
+
+- **Additive schema.** `network-features-v1` is a separate 39-column allowlist.
+  The 13-column `features-v1` schema, its order and its artifacts are untouched.
+  `CONTRACT_VERSION` moved to `1.1.0` with additive reason codes
+  (`no_events`, `insufficient_coverage`, `telemetry_quality`) and
+  `EventType.AUTH_SUCCESS`.
+- **Deterministic local simulator.** 10 runs × 90 minutes × 3 streams. It emits
+  canonical LAD `1.0` envelopes on one channel and evaluation labels on a
+  separate channel. It makes no network request and performs no login.
+- **Covers the required families.** HTTP 5xx bursts, DB timeouts/latency,
+  auth-failure bursts, benign high traffic / latency / restart, and
+  missing/malformed telemetry.
+- **Leak-safe.** No labels, scenario names, run IDs, future values, raw
+  identifiers, message text or PII enter the feature matrix. Rolling features
+  use only prior windows of the same host/service. Imputation is fitted on the
+  training split only.
+- **Two split strategies.** `time` is the deployed default and is strictly
+  chronological; `group` keeps whole runs disjoint as a cross-check. The
+  threshold is selected on validation only.
+- **Status-aware evaluation.** Empty or degraded windows return
+  `insufficient_data` with `is_anomaly = None`; they are excluded from
+  supervised metrics, never counted as normal.
+- **Measured test results (time split).** Precision 0.7059, recall 0.9000,
+  F1 0.7912, ROC-AUC 0.9674, PR-AUC 0.8326; benign-window FPR 0.0767. The
+  transparent rule baseline reaches F1 0.7195. These are synthetic figures and
+  do not establish real-world quality; see the evaluation document for the
+  failure modes, including a 25% false-positive rate on the benign high-traffic
+  scenario.
+- **Optional explanation adapter.** Disabled by default, evidence-grounded,
+  offline mock by default, bounded HTTP provider only when explicitly enabled.
+  It never creates or upgrades a detection.
+
+```bash
+python scripts/run_network_simulator.py --config configs/network.yaml
+python scripts/run_network_pipeline.py --config configs/network.yaml
+```
+
+---
+
 ## 9. Tests
 
 ```bash
@@ -557,7 +633,13 @@ boundary. Milestone 7 adds coverage for the validation-only selection policy
 robustness-floor rules, the corrected M4 auto-picker, the threshold audit, the
 readiness verdict, and the end-to-end path (malformed event rejected,
 duplicate de-duplicated, late event re-windowed, missing value imputed and
-reported, no unscored window forwarded as normal).
+reported, no unscored window forwarded as normal). Milestone 9 adds 51 offline
+network tests covering the LAD envelope adapter (deduplication, out-of-order
+detection, PII removal, partial-quality records), the 39-column schema and
+zero-denominator semantics, causal rolling features, time/group split integrity,
+scenario coverage, status handling (empty, sparse, degraded, naive and malformed
+windows), model reload/reproducibility and the evidence-grounded explanation
+adapter. The full suite currently reports **375 passed**.
 
 ---
 
@@ -576,9 +658,12 @@ ml-anomaly-detector/
 ├── pyproject.toml
 ├── requirements.txt
 ├── .gitignore
-├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml, robustness.yaml, selection.yaml}
+├── configs/{default.yaml, data_readiness.yaml, baseline.yaml, comparison.yaml,
+│            robustness.yaml, selection.yaml, network.yaml}
 ├── docs/{DATASETS.md, DATA_READINESS.md, BASELINE.md, MODEL_COMPARISON.md,
-│        ml_inference_contract.md, ML_HANDOFF.md, READINESS_AUDIT.md}
+│        ml_inference_contract.md, ML_HANDOFF.md, READINESS_AUDIT.md,
+│        ml_network_reconnaissance.md, ml_network_features.md,
+│        ml_network_evaluation.md, ml_network_integration.md}
 ├── data/{raw,processed,synthetic}/   (git-ignored, keep .gitkeep)
 ├── reports/                          (git-ignored, keep .gitkeep)
 ├── src/anomaly_detector/
@@ -620,6 +705,16 @@ ml-anomaly-detector/
 │   ├── readiness_audit.py         # M7 fair comparison, threshold audit, verdict
 │   ├── e2e_scenarios.py           # M7 raw-event end-to-end scenarios
 │   ├── e2e_runner.py              # M7 real M1 -> M6 -> sink driver
+│   ├── network/                   # M9 network/service-log extension
+│   │   ├── simulator.py           # deterministic LAD-envelope simulator
+│   │   ├── lad_adapter.py         # canonical LAD event mapping + quality
+│   │   ├── features.py            # network-features-v1 (39 columns)
+│   │   ├── baseline.py            # transparent rule/MAD baseline
+│   │   ├── inference.py           # NetworkDetector / load_network_detector
+│   │   ├── splits.py              # time and group split integrity
+│   │   ├── evaluation.py          # status-aware metrics
+│   │   ├── llm.py                 # optional evidence-grounded explanation
+│   │   └── pipeline.py            # end-to-end orchestration
 │   └── dataset_adapters/{__init__.py, base.py, loghub_hdfs.py}
 ├── scripts/
 │   ├── generate_synthetic_data.py
@@ -633,7 +728,9 @@ ml-anomaly-detector/
 │   ├── run_comparison.py          # M4
 │   ├── run_robustness.py          # M5
 │   ├── smoke_test_inference.py    # M6
-│   └── run_readiness_audit.py     # M7
+│   ├── run_readiness_audit.py     # M7
+│   ├── run_network_simulator.py   # M9
+│   └── run_network_pipeline.py    # M9
 ├── tests/ (incl. fixtures/hdfs_sample/)
 └── artifacts/ (git-ignored, keep .gitkeep)
 ```
@@ -668,29 +765,43 @@ ml-anomaly-detector/
 - M7 fixed the M4 auto-picker that selected a model using test-set metrics, and the
   unfair training rows given to the MAD/LOF candidates. The historical M4 run
   directory is preserved unchanged; a fresh run now agrees with the written M4 report.
+- **M9 network figures are synthetic and scenario-repeating.** Every simulated run
+  uses the same 90-minute schedule, so the splits share scenario structure. The
+  measured F1/recall values validate the pipeline, not production generalisation.
+  Legitimate traffic volume remains a real weakness: the benign high-traffic scenario
+  has a 0.25 false-positive rate in the time test split. The rule baseline also beats
+  the Isolation Forest on the clearest auth-burst pattern. See
+  [`docs/ml_network_evaluation.md`](docs/ml_network_evaluation.md) §7.
 
 ## 12. Boundary with the next milestone
 
-Milestones 1–7 stop here with a tested, documented data pipeline, a leakage-audited,
+Milestones 1–9 stop here with a tested, documented data pipeline, a leakage-audited,
 reproducible, training-ready dataset (features / labels / metadata kept separate,
 splits produced under three strategies), a reproducible Isolation Forest baseline, a
 fair comparison against a robust MAD baseline and LOF (novelty), a
 robustness/failure-mode analysis against controlled scenarios, a **stable, versioned
-inference interface** for the downstream correlation/explanation component, and a
+inference interface** for the downstream correlation/explanation component, a
 **readiness audit** that root-caused and fixed the M4 test-leakage in the auto-picker
-and re-decided the model selection on validation evidence only.
+and re-decided the model selection on validation evidence only, and (M9) an additive
+**network/service-log detector** with its own leak-safe feature schema, local
+simulator, transparent baseline, split discipline and optional explanation adapter.
 
 M1–M5 artifacts are preserved; M4, M5 and M7 write unique outputs under
 `artifacts/comparison/`, `artifacts/robustness/` and `artifacts/readiness/`; M6
 produces no artifacts of its own — it is an in-process interface over the M3 model
-artifact. Future work must reuse the *same* contract: the same allowlist, the same
-missing-value policy, the same score direction and the same train/validation/test
-discipline. Do not use test labels for tuning or selection, and do not retrain or
-re-threshold at inference time.
+artifact. M9 writes only under `artifacts/network/` and `data/synthetic/network/`,
+and does not modify any M1–M8 artifact. Future work must reuse the *same* contract:
+the same allowlists, the same missing-value policy, the same score direction and the
+same train/validation/test discipline. Do not use test labels for tuning or
+selection, and do not retrain or re-threshold at inference time.
 
-The M6 contract is versioned (`CONTRACT_VERSION = 1.0.0`,
-`FEATURE_SCHEMA_VERSION = features-v1`). Any change to the request/result shape or
-to the feature allowlist must bump those versions and update
+The M6 contract is versioned (`CONTRACT_VERSION = 1.1.0`,
+`FEATURE_SCHEMA_VERSION = features-v1`). The `1.1.0` bump is **additive only**:
+the network extension adds the separate `network-features-v1` schema, three
+reason codes (`no_events`, `insufficient_coverage`, `telemetry_quality`) and
+`EventType.AUTH_SUCCESS`; existing fields, statuses, score direction and the
+`features-v1` allowlist are unchanged. Any further change to the request/result
+shape or to a feature allowlist must bump those versions and update
 [`docs/ml_inference_contract.md`](docs/ml_inference_contract.md). The M7 selection
 policy is versioned by `configs/selection.yaml`; changing the weights, the margin or
 the robustness floors requires a new audited run, not an in-place edit.
@@ -700,5 +811,7 @@ splits by `scenario_name` can place all anomalies in one fold (the tooling warns
 does not hide this). Choose the split strategy deliberately and consider a
 scenario-mixed or time-based split for detection experiments. The `random` strategy is
 the one used for the headline numbers. M7 re-ran the audit on the `random` split
-only — the time-based and group-based splits have **not** been re-audited and are
-the first thing the next milestone should do.
+only — the **M3/M4 baseline** time-based and group-based splits have **not** been
+re-audited and remain the first thing the next milestone should do. M9 independently
+uses audited chronological (`time`) and run-disjoint (`group`) splits for the network
+extension, but that does not retro-audit the earlier baseline pipeline.

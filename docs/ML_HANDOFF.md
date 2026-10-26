@@ -1,4 +1,4 @@
-# ML Component Handoff (Milestone 6, updated in Milestone 8)
+# ML Component Handoff (Milestone 6, updated in Milestone 9)
 
 **Audience:** the teammate who owns evidence correlation, incident
 explanation and root-cause assistance.
@@ -16,6 +16,13 @@ short version: what to call, what you get back, and what you must handle.
 > and a local integration harness (`IntegrationHarness`) is available. See
 > §8 below for what is still needed from you.
 
+> **Milestone 9 update.** An **additive** network/service-log detector is
+> available beside the existing `features-v1` interface. It uses the separate
+> `network-features-v1` schema (39 columns), keeps the same `InferenceResult`
+> and the same status/score semantics, and adds three reason codes
+> (`no_events`, `insufficient_coverage`, `telemetry_quality`). Contract version
+> is now `1.1.0`. If you only consume `features-v1`, nothing changes. See §9.
+
 ---
 
 ## 0. Read these first
@@ -25,6 +32,7 @@ short version: what to call, what you get back, and what you must handle.
 | 1 | [`ml_inference_contract.md`](ml_inference_contract.md) | The canonical request/result contract. |
 | 2 | [`INTEGRATION_BOUNDARY.md`](INTEGRATION_BOUNDARY.md) | The boundary, routing rule, ownership split. |
 | 3 | **This file** | The quick start and checklist. |
+| 4 | [`ml_network_integration.md`](ml_network_integration.md) | The additive network detector, if you consume network windows. |
 
 ---
 
@@ -181,7 +189,10 @@ Either way it is never reported as a successful delivery.
 
 ## 6. Integration checklist
 
-- [ ] Depend on `anomaly_detector.inference` only.
+- [ ] Depend on `anomaly_detector.inference` (and, for network windows,
+      `anomaly_detector.network`) only.
+- [ ] Keep `features-v1` and `network-features-v1` separate; do not send one
+      schema to the other detector.
 - [ ] `load_detector()` once at start-up; reuse the object.
 - [ ] Use the project `sample_key` as `window_id`.
 - [ ] Branch on `status` first, `reason_code` second, `is_anomaly` last.
@@ -202,10 +213,11 @@ Every command below was run and passed:
 
 ```bash
 python -m pytest tests/test_integration_boundary.py -v   # 35 passed
-python -m pytest tests/ -q                               # 324 passed
+python -m pytest tests/ -q                               # 375 passed
 python scripts/run_integration_rehearsal.py              # local rehearsal
 python scripts/smoke_test_inference.py                  # M6 smoke test
 python scripts/run_readiness_audit.py                   # M7 readiness audit
+python scripts/run_network_pipeline.py --config configs/network.yaml  # M9
 ```
 
 If the package is not installed, prefix with `PYTHONPATH=src`.
@@ -233,7 +245,53 @@ interface remains **explicitly pending**.
 
 ---
 
-## 9. What the component does not prove
+## 9. Milestone 9 — network / service-log detector
+
+The network extension is a **separate, additive** entry point. It does not
+change the `features-v1` call path described above.
+
+```python
+from anomaly_detector.network import NetworkWindow, load_network_detector
+
+detector = load_network_detector()          # artifacts/network/model/*
+result = detector.score_window(window)      # same InferenceResult
+```
+
+| Item | Value |
+|---|---|
+| Feature schema | `network-features-v1` (39 columns) |
+| Feature allowlist | `detector.expected_feature_columns` |
+| Artifact | `artifacts/network/model/{model.joblib,manifest.json}` |
+| Decision | Isolation Forest, `is_anomaly = raw_score <= threshold` |
+| Rule baseline | Evidence/severity only; never changes `is_anomaly` |
+| Explanation | Optional, disabled by default, never changes a decision |
+
+### What you must handle differently
+
+| Condition | Status | Reason |
+|---|---|---|
+| `event_count` is zero or absent | `insufficient_data` | `no_events` |
+| `event_count < 5` (configurable) | `insufficient_data` | `insufficient_coverage` |
+| Quality records exceed accepted events | `insufficient_data` | `telemetry_quality` |
+| `features-v1`-shaped input | `invalid_input` | `unknown_features` / `missing_features` |
+
+The same absolute rule still applies: every non-`scored` result is **unknown**,
+never normal. An empty window must not become a "no anomaly" event.
+
+Network results put extra context in `result.extra["network"]`: `severity`,
+`decision_source`, `model_only_anomaly`, the independent rule `baseline`, the
+explicit `telemetry_quality` counts and a small `evidence_features` map. Treat
+these as evidence for correlation, not as a diagnosis.
+
+Full details: [`ml_network_integration.md`](ml_network_integration.md).
+Schema, simulator and leakage controls:
+[`ml_network_features.md`](ml_network_features.md).
+Measured results and limitations:
+[`ml_network_evaluation.md`](ml_network_evaluation.md).
+
+---
+
+## 10. What the component does not prove
 
 The model was trained and validated on **synthetic** data. A flagged window
 is a *lead for investigation*, not proof of an attack, and the score is a
@@ -243,6 +301,12 @@ telemetry — check `data_quality.imputed_features` before trusting a score
 from a degraded window.
 
 Milestone 7's readiness verdict stands: **`controlled demo only`**.
+
+The M9 network detector is in the same position. Its figures come from a
+deterministic simulator that repeats one scenario schedule; they validate the
+pipeline, not production generalisation. The benign high-traffic scenario has a
+0.25 false-positive rate in the time test split, so volume-driven alerts should
+be expected and must be tuned before operational use.
 
 Full details, including the exact behaviour matrix and versioning rules:
 [`ml_inference_contract.md`](ml_inference_contract.md).

@@ -1,7 +1,8 @@
-# ML Inference Contract — v1.0.0
+# ML Inference Contract — v1.1.0
 
 **Status:** stable · **Applies to:** the anomaly-detection ML component only
-**Contract version:** `1.0.0` · **Feature schema version:** `features-v1`
+**Contract version:** `1.1.0` · **Feature schema version:** `features-v1`
+**Additive extension:** `network-features-v1` (network/service-log detector)
 
 This document is the versioned, callable boundary between the ML
 anomaly-detection component and the rest of the Automated Log Anomaly
@@ -91,7 +92,7 @@ request = FeatureWindowRequest(
 | `features` | `Mapping[str, float \| int \| None]` | ✅ | values may be `None` | Exactly the 13 allowlisted features (below). `None` means *missing*, not zero. |
 | `host_id` | `str` | ❌ | ✅ | Metadata only. **Never** a model feature. |
 | `service_name` | `str` | ❌ | ✅ | Metadata only. **Never** a model feature. |
-| `feature_schema_version` | `str` | ❌ | ✅ | When supplied it must equal `features-v1`, else the request is rejected. |
+| `feature_schema_version` | `str` | ❌ | ✅ | When supplied it must equal `features-v1` for the base detector, or `network-features-v1` for the network detector, else the request is rejected. |
 | `extra` | `Mapping[str, Any]` | ❌ | ✅ | Caller metadata, echoed back untouched. Never used as a feature, never logged by default. |
 
 ### 3.2 Model features (explicit allowlist, order matters)
@@ -152,7 +153,7 @@ the component to enforce staleness.
 
 ```json
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "status": "scored",
   "reason_code": "ok",
   "reason": "scored with the selected model",
@@ -338,18 +339,42 @@ unscored window as a normal prediction.
 
 ## 8. Versioning rules
 
-* `CONTRACT_VERSION` (`1.0.0`) — bump **minor** for additive,
+* `CONTRACT_VERSION` (`1.1.0`) — bump **minor** for additive,
   backward-compatible changes; bump **major** for removed/renamed fields or
   changed semantics.
 * `FEATURE_SCHEMA_VERSION` (`features-v1`) — bump whenever the allowlist or
   the order of the allowlisted features changes. A detector built on
   `features-v1` rejects a request declaring a different schema version.
+* `network-features-v1` — a **separate** 39-column schema with its own
+  detector and artifact. It is not a replacement for `features-v1` and cannot
+  be scored by a `features-v1` detector (or vice versa).
 * `model.artifact_version` — the serialized-artifact format version. The
   loader refuses an artifact with an unexpected version.
 * `model.version` — the code revision the model was trained from.
 * `model.threshold_config_version` — config path + revision + the threshold
   value actually used, so a result can always be traced back to the exact
   decision rule that produced it.
+
+### 8.1 The `1.1.0` additive extension
+
+`1.1.0` adds the network/service-log detector **without changing** any existing
+field, status, score direction or decision rule.
+
+| Addition | Value | Effect on existing callers |
+|---|---|---|
+| Feature schema identifier | `network-features-v1` (39 columns) | None; `features-v1` is untouched. |
+| `ReasonCode` members | `no_events`, `insufficient_coverage`, `telemetry_quality` | None; existing members are unchanged. |
+| `EventType` member | `auth_success` | None; existing members are unchanged. |
+| Result payload | optional `extra["network"]` block | None; absent for `features-v1` results. |
+
+The five status values are unchanged, and the absolute rule remains:
+`status != "scored"` is **unknown**, never normal.
+
+Callers that serialise enums should preserve unknown members rather than crash.
+Callers that only know `features-v1` keep working unchanged. The normative
+network guide is [`ml_network_integration.md`](ml_network_integration.md); the
+schema and leakage controls are in
+[`ml_network_features.md`](ml_network_features.md).
 
 ---
 
@@ -358,10 +383,12 @@ unscored window as a normal prediction.
 ```bash
 pytest tests/test_inference_contract.py -v      # contract, compatibility, failure modes
 pytest tests/test_inference_integration.py -v   # integration boundary, end to end
-pytest tests/ -q                                 # full M1–M6 suite (offline)
+pytest tests/test_network_*.py -v               # additive network extension (51 tests)
+pytest tests/ -q                                 # full M1–M9 suite (offline; 375 passed)
 
 python scripts/smoke_test_inference.py           # single window
 python scripts/smoke_test_inference.py --all     # whole split
+python scripts/run_network_pipeline.py --config configs/network.yaml  # M9 end to end
 ```
 
 The tests are offline and deterministic: no network, no AWS, no dashboard,
@@ -406,3 +433,8 @@ no training job, no large fixture.
 * The component is single-process and in-memory. It has no queueing,
   batching scheduler, caching or rate limiting — those belong to the
   service layer, not here.
+* The `network-features-v1` detector is likewise synthetic-only. Its simulator
+  repeats one scenario schedule per run, so measured metrics validate the
+  pipeline rather than production generalisation. Legitimate traffic volume is
+  a known false-positive source. See
+  [`ml_network_evaluation.md`](ml_network_evaluation.md) §7.

@@ -237,8 +237,10 @@ the threshold recorded in the model manifest.
 * Milestone 7's verdict stands: **`controlled demo only`**.
 * Any change to the request/result shape, the status vocabulary or the
   feature allowlist requires a **contract version bump** (currently
-  `CONTRACT_VERSION = 1.0.0`, `FEATURE_SCHEMA_VERSION = features-v1`),
-  migration notes and tests. The M8 changes are **backward compatible**:
+  `CONTRACT_VERSION = 1.1.0`, `FEATURE_SCHEMA_VERSION = features-v1`, with the
+  additive `network-features-v1` network detector), migration notes and tests.
+  The `1.1.0` change is **additive only**: three reason codes, one event type
+  and a separate feature schema. The M8 changes are **backward compatible**:
   `AdapterOutcome.rejected` / `.rejected_count` still work and are now views
   over `unscored` / `unscored_count`.
 
