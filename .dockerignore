@@ -1,0 +1,34 @@
+# Keep secrets, datasets, model weights, local run output and VCS metadata out
+# of the image.  The model artifact is mounted read-only at run time instead.
+.git
+.gitignore
+.env
+.env.*
+!deploy/.env.example
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+artifacts/
+data/
+reports/
+trained_model_data_from_kaggle/
+*.joblib
+*.pkl
+*.pickle
+*.log
+opencode_prompt.md
+opencode_*.md
+ml_anomaly_detector_*.md
+ml_anomaly_detector_*.txt
+ml_anomaly_detector_*.zip
+docs/

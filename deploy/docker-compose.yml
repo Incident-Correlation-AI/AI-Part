@@ -1,0 +1,115 @@
+# Cloud-parity Compose stack for the dual-deployment audit.
+#
+#   cd deploy
+#   cp .env.example .env          # optional; defaults work without it
+#   docker compose up --build -d
+#   curl -fsS http://127.0.0.1:8080/readyz | python -m json.tool
+#
+# The model artifact is mounted read-only from the host; it is never baked
+# into the image.  The optional `mock-llm` profile exercises the real HTTP
+# explanation transport against a local deterministic provider.  It is a
+# mock boundary, not an external LLM.
+
+name: lad-anomaly-detector
+
+services:
+  detector:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: lad-anomaly-detector:${LAD_IMAGE_TAG:-audit}
+    container_name: lad-detector-audit
+    ports:
+      - "${LAD_PORT:-8080}:8080"
+    environment:
+      LAD_HOST: "0.0.0.0"
+      LAD_PORT: "8080"
+      LAD_DEPLOYMENT_MODE: "container"
+      LAD_SERVICE_VERSION: ${LAD_SERVICE_VERSION:-1.0.0-audit}
+      LAD_MODEL_PATH: /app/artifacts/network/model/model.joblib
+      LAD_MANIFEST_PATH: /app/artifacts/network/model/manifest.json
+      LAD_NETWORK_CONFIG: /app/configs/network.yaml
+      LAD_CORRELATION_CONFIG: /app/configs/correlation.yaml
+      LAD_MAX_REQUEST_BYTES: ${LAD_MAX_REQUEST_BYTES:-8388608}
+      LAD_MAX_EVENTS_PER_REQUEST: ${LAD_MAX_EVENTS_PER_REQUEST:-5000}
+      LAD_MAX_BUFFER_EVENTS: ${LAD_MAX_BUFFER_EVENTS:-250000}
+      LAD_MAX_WINDOWS_PER_REQUEST: ${LAD_MAX_WINDOWS_PER_REQUEST:-50000}
+      LAD_MAX_INCIDENTS_IN_RESPONSE: ${LAD_MAX_INCIDENTS_IN_RESPONSE:-50}
+      LAD_MAX_RECORDS_IN_RESPONSE: ${LAD_MAX_RECORDS_IN_RESPONSE:-500}
+      LAD_LOG_LEVEL: ${LAD_LOG_LEVEL:-INFO}
+      LAD_CORRELATION_WINDOW_SECONDS: ${LAD_CORRELATION_WINDOW_SECONDS:-120}
+      LAD_CORRELATION_REQUIRE_EVENT_EVIDENCE: ${LAD_CORRELATION_REQUIRE_EVENT_EVIDENCE:-true}
+      LAD_CORRELATION_EXPLAIN: ${LAD_CORRELATION_EXPLAIN:-false}
+      LAD_LLM_PROVIDER: ${LAD_LLM_PROVIDER:-mock}
+      LAD_LLM_ENDPOINT: ${LAD_LLM_ENDPOINT:-http://mock-llm:8081/v1/chat/completions}
+      LAD_LLM_MODEL: ${LAD_LLM_MODEL:-lad-grounded-mock-v1}
+      LAD_LLM_API_KEY_ENV: ${LAD_LLM_API_KEY_ENV:-LAD_LLM_API_KEY}
+      LAD_LLM_TIMEOUT_SECONDS: ${LAD_LLM_TIMEOUT_SECONDS:-20}
+    volumes:
+      - ../artifacts:/app/artifacts:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 25s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional deterministic provider boundary.  Enable with:
+  #   docker compose --profile mock-llm up --build -d
+  # and set LAD_LLM_PROVIDER=http in .env (or the shell).
+  mock-llm:
+    profiles: ["mock-llm"]
+    image: lad-anomaly-detector:${LAD_IMAGE_TAG:-audit}
+    container_name: lad-mock-llm-audit
+    entrypoint: ["python", "-m", "deploy.mock_llm"]
+    environment:
+      LAD_MOCK_LLM_HOST: "0.0.0.0"
+      LAD_MOCK_LLM_PORT: "8081"
+      LAD_LOG_LEVEL: ${LAD_LOG_LEVEL:-INFO}
+    expose:
+      - "8081"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 256m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
