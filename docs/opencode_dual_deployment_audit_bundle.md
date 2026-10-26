@@ -947,14 +947,16 @@ threshold and contract version are unchanged.
 |---|---|
 | Feature branch | `audit/dual-deployment-e2e-2026-10-26` |
 | Base branch | `main` at `6d48bfc` |
-| Audit commit | `AUDIT_COMMIT_SHA` |
+| Audit commit | `0b0bc82f3b76c0c987ff1496893f13de0770a84c` (`0b0bc82`) |
 | Remote | `origin` → `git@github.com:Incident-Correlation-AI/AI-Part.git` |
-| Push result | `PUSH_RESULT` |
+| Push result | **Success** — new branch pushed to `origin/audit/dual-deployment-e2e-2026-10-26` (exit 0) |
+| PR target | `https://github.com/Incident-Correlation-AI/AI-Part/pull/new/audit/dual-deployment-e2e-2026-10-26` |
 | Merged to `main` | **No** (intentionally not merged) |
 | PR | Not opened automatically; PR-style summary in §12 |
 
-The commit SHA and push result are filled in by the audit runner after the secret scan and
-push. If the push was blocked, the local commit and this bundle remain available.
+A follow-up documentation commit records this Git table at the branch tip. The audit commit
+is the commit that contains the source, tests, deployment files and the first version of the
+three documents.
 
 ---
 
@@ -1691,8 +1693,9 @@ real-world validation was performed.
 | Remote | `origin` → `git@github.com:Incident-Correlation-AI/AI-Part.git` |
 | Base branch | `main` at `6d48bfc` |
 | Feature branch | `audit/dual-deployment-e2e-2026-10-26` |
-| Audit commit | `AUDIT_COMMIT_SHA` |
-| Push result | `PUSH_RESULT` |
+| Audit commit | `0b0bc82f3b76c0c987ff1496893f13de0770a84c` (`0b0bc82`) |
+| Push result | **Success** — new branch pushed to `origin/audit/dual-deployment-e2e-2026-10-26` (exit 0) |
+| PR target | `https://github.com/Incident-Correlation-AI/AI-Part/pull/new/audit/dual-deployment-e2e-2026-10-26` |
 | Merged to `main` | No |
 
 ## Delivery note
@@ -1703,9 +1706,9 @@ This bundle is delivered two ways:
 2. **Raw GitHub URL (feature branch):**
    `https://raw.githubusercontent.com/Incident-Correlation-AI/AI-Part/audit/dual-deployment-e2e-2026-10-26/docs/opencode_dual_deployment_audit_bundle.md`
 
-The GitHub URL resolves only if the branch push succeeded. If the push was blocked, the
-local absolute path above is the authoritative copy. The push result field records the
-actual outcome.
+The feature branch was pushed successfully, so the raw URL resolves against the branch tip
+(this documentation commit or later). The local absolute path is
+`/home/barok/Documents/Obsidian Vault/File file on the wall/ml-anomaly-detector/docs/opencode_dual_deployment_audit_bundle.md`.
 
 ## What remains unverified
 

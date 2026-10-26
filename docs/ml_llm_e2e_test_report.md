@@ -118,14 +118,16 @@ threshold and contract version are unchanged.
 |---|---|
 | Feature branch | `audit/dual-deployment-e2e-2026-10-26` |
 | Base branch | `main` at `6d48bfc` |
-| Audit commit | `AUDIT_COMMIT_SHA` |
+| Audit commit | `0b0bc82f3b76c0c987ff1496893f13de0770a84c` (`0b0bc82`) |
 | Remote | `origin` → `git@github.com:Incident-Correlation-AI/AI-Part.git` |
-| Push result | `PUSH_RESULT` |
+| Push result | **Success** — new branch pushed to `origin/audit/dual-deployment-e2e-2026-10-26` (exit 0) |
+| PR target | `https://github.com/Incident-Correlation-AI/AI-Part/pull/new/audit/dual-deployment-e2e-2026-10-26` |
 | Merged to `main` | **No** (intentionally not merged) |
 | PR | Not opened automatically; PR-style summary in §12 |
 
-The commit SHA and push result are filled in by the audit runner after the secret scan and
-push. If the push was blocked, the local commit and this bundle remain available.
+A follow-up documentation commit records this Git table at the branch tip. The audit commit
+is the commit that contains the source, tests, deployment files and the first version of the
+three documents.
 
 ---
 
