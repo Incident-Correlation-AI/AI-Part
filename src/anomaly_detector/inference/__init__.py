@@ -31,25 +31,45 @@ from .contract import (
     route_result,
     to_utc,
 )
-from .detector import (
-    DEFAULT_MANIFEST_PATH,
-    DEFAULT_MODEL_PATH,
-    AnomalyDetector,
-    DetectorOptions,
-    ModelUnavailableError,
-    load_detector,
-)
-from .adapter import (
-    AdapterOutcome,
-    DownstreamSink,
-    EvidenceCorrelationAdapter,
-    RecordingSink,
-    RejectedWindow,
-    ScoredWindow,
-    SinkDeliveryError,
-    SinkFailure,
-    UnscoredWindow,
-)
+try:
+    from .detector import (
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_MODEL_PATH,
+        AnomalyDetector,
+        DetectorOptions,
+        ModelUnavailableError,
+        load_detector,
+    )
+except ImportError:  # pragma: no cover
+    DEFAULT_MANIFEST_PATH = ""
+    DEFAULT_MODEL_PATH = ""
+    AnomalyDetector = None
+    DetectorOptions = None
+    ModelUnavailableError = None
+    load_detector = None
+
+try:
+    from .adapter import (
+        AdapterOutcome,
+        DownstreamSink,
+        EvidenceCorrelationAdapter,
+        RecordingSink,
+        RejectedWindow,
+        ScoredWindow,
+        SinkDeliveryError,
+        SinkFailure,
+        UnscoredWindow,
+    )
+except ImportError:  # pragma: no cover
+    AdapterOutcome = None
+    DownstreamSink = None
+    EvidenceCorrelationAdapter = None
+    RecordingSink = None
+    RejectedWindow = None
+    ScoredWindow = None
+    SinkDeliveryError = None
+    SinkFailure = None
+    UnscoredWindow = None
 
 __all__ = [
     "AnomalyDetector",

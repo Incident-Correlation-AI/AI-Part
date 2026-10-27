@@ -11,7 +11,13 @@ only an additive feature-schema identifier and telemetry reason codes were
 introduced (see ``docs/ml_network_integration.md``).
 """
 from .config import NetworkConfig, load_network_config
-from .evaluation import evaluate_split_predictions, evaluate_strategy_predictions
+
+try:
+    from .evaluation import evaluate_split_predictions, evaluate_strategy_predictions
+except ImportError:  # pragma: no cover
+    evaluate_split_predictions = None
+    evaluate_strategy_predictions = None
+
 from .features import (
     NETWORK_FEATURE_COLUMNS,
     NETWORK_FEATURE_SCHEMA_VERSION,
@@ -29,12 +35,20 @@ from .lad_adapter import (
     RejectedLadEvent,
     parse_lad_events,
 )
-from .inference import (
-    NetworkDetector,
-    NetworkDetectorOptions,
-    NetworkModelUnavailableError,
-    load_network_detector,
-)
+
+try:
+    from .inference import (
+        NetworkDetector,
+        NetworkDetectorOptions,
+        NetworkModelUnavailableError,
+        load_network_detector,
+    )
+except ImportError:  # pragma: no cover
+    NetworkDetector = None
+    NetworkDetectorOptions = None
+    NetworkModelUnavailableError = None
+    load_network_detector = None
+
 from .llm import (
     DraftExplanation,
     EvidenceBundle,
@@ -44,7 +58,14 @@ from .llm import (
     explain_result,
     validate_draft,
 )
-from .pipeline import NetworkRunResult, StrategyRun, build_predictions, run_network_pipeline
+
+try:
+    from .pipeline import NetworkRunResult, StrategyRun, build_predictions, run_network_pipeline
+except ImportError:  # pragma: no cover
+    NetworkRunResult = None
+    StrategyRun = None
+    build_predictions = None
+    run_network_pipeline = None
 from .simulator import SimulatedDataset, SimulatorConfig, simulate
 from .splits import SplitAssignment, make_split_assignment
 
