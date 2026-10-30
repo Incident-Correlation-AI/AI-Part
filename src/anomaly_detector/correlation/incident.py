@@ -87,6 +87,10 @@ _CHECK_BY_CODE = {
         "Inspect restart/health events and deployment history for the "
         "affected service."
     ),
+    "mad_robust_zscore": (
+        "Inspect event and request volume for an extreme surge or anomaly "
+        "diverging significantly from the robust rolling baseline."
+    ),
     "model_score": (
         "The model flagged this window without a transparent rule hit; compare "
         "the listed measurements with the preceding baseline before acting."

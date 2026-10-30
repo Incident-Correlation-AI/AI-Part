@@ -24,10 +24,20 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import json
 import time
 
-import numpy as np
-import pandas as pd
+try:
+    import numpy as np
+except (ImportError, ModuleNotFoundError):
+    np = None
 
-from ..baseline_model import BaselineDetector
+try:
+    import pandas as pd
+except (ImportError, ModuleNotFoundError):
+    pd = None
+
+try:
+    from ..baseline_model import BaselineDetector
+except (ImportError, ModuleNotFoundError):
+    BaselineDetector = Any  # type: ignore[misc,assignment]
 from ..model_contract import ModelContractError, prepare_model_input
 from ..inference.contract import (
     CONTRACT_VERSION,
@@ -289,7 +299,14 @@ class NetworkDetector:
         raw_score = float(np.asarray(scores, dtype="float64").ravel()[0])
         is_anomaly = bool(self._detector.flag(np.array([raw_score]), self.threshold)[0])
         baseline = score_baseline(features, self.rules)
-        severity = _severity(is_anomaly, baseline, self.rules)
+        severity = _severity(
+            is_anomaly,
+            baseline,
+            self.rules,
+            raw_score=raw_score,
+            threshold=self.threshold,
+            features=features,
+        )
         evidence = _evidence(features)
 
         return InferenceResult(
@@ -445,12 +462,41 @@ def _validate_manifest(manifest: Dict[str, Any], detector: BaselineDetector) -> 
         )
 
 
-def _severity(is_anomaly: bool, baseline: BaselineDecision, rules: RuleConfig) -> str:
+def _severity(
+    is_anomaly: bool,
+    baseline: BaselineDecision,
+    rules: RuleConfig,
+    raw_score: Optional[float] = None,
+    threshold: Optional[float] = None,
+    features: Optional[Mapping[str, Any]] = None,
+) -> str:
+    if not is_anomaly and baseline.risk_score <= 0:
+        return "none"
+
+    # 1. Transparent baseline rule hit meets high severity threshold
     if baseline.risk_score >= rules.high_severity_threshold:
         return "high"
-    if baseline.is_anomaly:
+
+    # 2. Isolation Forest deep tail outlier: raw_score <= threshold - isolation_forest_high_delta
+    if is_anomaly and raw_score is not None and threshold is not None:
+        high_if_delta = getattr(rules, "isolation_forest_high_delta", 0.10)
+        if raw_score <= (threshold - high_if_delta):
+            return "high"
+
+    # 3. Robust MAD z-score check
+    if features is not None:
+        mad_high_z = getattr(rules, "mad_high_zscore", 4.0)
+        z_scores = [
+            abs(float(features[col]))
+            for col in ("event_count_zscore", "http_request_count_zscore")
+            if features.get(col) is not None
+        ]
+        if any(z >= mad_high_z for z in z_scores):
+            return "high"
+
+    if is_anomaly or baseline.is_anomaly:
         return "medium"
-    if is_anomaly or baseline.risk_score > 0:
+    if baseline.risk_score > 0:
         return "low"
     return "none"
 

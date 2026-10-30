@@ -102,6 +102,8 @@ class RuleConfig:
     strong_weight: float = 1.0
     decision_threshold: float = 1.0
     high_severity_threshold: float = 2.0
+    isolation_forest_high_delta: float = 0.10
+    mad_high_zscore: float = 4.0
 
 
 @dataclass

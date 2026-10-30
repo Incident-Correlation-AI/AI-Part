@@ -217,6 +217,21 @@ def score_window(features: Mapping[str, Any], rules: Optional[RuleConfig] = None
             message="More restarts than the configured routine allowance",
         ))
 
+    # MAD robust deviation check on rolling metrics
+    event_z = abs(_get(features, "event_count_zscore") or 0.0)
+    http_z = abs(_get(features, "http_request_count_zscore") or 0.0)
+    max_mad_z = max(event_z, http_z)
+    mad_threshold = getattr(rules, "mad_high_zscore", 4.0)
+    if max_mad_z >= mad_threshold:
+        hits.append(RuleHit(
+            code="mad_robust_zscore",
+            strength="strong",
+            weight=rules.high_severity_threshold,
+            observed={"max_mad_zscore": round(max_mad_z, 3)},
+            threshold={"mad_high_zscore": mad_threshold},
+            message="Robust MAD deviation indicates extreme divergence from rolling baseline",
+        ))
+
     risk = round(sum(hit.weight for hit in hits), 6)
     is_anomaly = risk >= rules.decision_threshold
     if risk >= rules.high_severity_threshold:
