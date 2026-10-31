@@ -183,6 +183,13 @@ class EvidenceBundle:
                     values.extend(_numeric_values(payload))
                 elif isinstance(payload, (int, float)) and not isinstance(payload, bool):
                     values.append(float(payload))
+        for entity_str in (self.host_id, self.service_name, self.window_id):
+            if entity_str:
+                for token in _NUMBER_RE.findall(str(entity_str)):
+                    try:
+                        values.append(float(token.rstrip("%")))
+                    except ValueError:
+                        pass
         expanded = set(values)
         for value in values:
             if 0.0 <= value <= 1.0:
