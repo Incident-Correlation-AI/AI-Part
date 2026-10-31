@@ -77,10 +77,16 @@ def score_window(features: Mapping[str, Any], rules: Optional[RuleConfig] = None
         and five_ratio >= rules.http_5xx_ratio_threshold
     ):
         strong = five_ratio >= rules.http_5xx_strong_ratio
+        if five_ratio >= 0.80 and five_count >= rules.http_5xx_min_requests:
+            weight = rules.high_severity_threshold
+            strength = "critical"
+        else:
+            weight = rules.strong_weight if strong else rules.weak_weight
+            strength = "strong" if strong else "weak"
         hits.append(RuleHit(
             code="http_5xx_rate",
-            strength="strong" if strong else "weak",
-            weight=rules.strong_weight if strong else rules.weak_weight,
+            strength=strength,
+            weight=weight,
             observed={
                 "http_5xx_count": five_count,
                 "http_status_eligible_count": eligible_http,
@@ -128,10 +134,16 @@ def score_window(features: Mapping[str, Any], rules: Optional[RuleConfig] = None
             ))
         if conn_ratio is not None and conn_ratio >= rules.db_connection_failure_ratio_threshold:
             strong = conn_ratio >= rules.db_connection_failure_strong_ratio
+            if conn_ratio >= 0.80 and db_events >= rules.db_min_events:
+                weight = rules.high_severity_threshold
+                strength = "critical"
+            else:
+                weight = rules.strong_weight if strong else rules.weak_weight
+                strength = "strong" if strong else "weak"
             hits.append(RuleHit(
                 code="db_connection_failure_rate",
-                strength="strong" if strong else "weak",
-                weight=rules.strong_weight if strong else rules.weak_weight,
+                strength=strength,
+                weight=weight,
                 observed={"db_event_count": db_events,
                           "db_connection_failure_ratio": round(conn_ratio, 6)},
                 threshold={"min_events": rules.db_min_events,
@@ -153,10 +165,16 @@ def score_window(features: Mapping[str, Any], rules: Optional[RuleConfig] = None
             and auth_ratio >= rules.auth_failure_ratio_threshold
         ):
             strong = auth_ratio >= rules.auth_failure_strong_ratio
+            if auth_ratio >= 0.80 and failures >= rules.auth_min_failures:
+                weight = rules.high_severity_threshold
+                strength = "critical"
+            else:
+                weight = rules.strong_weight if strong else rules.weak_weight
+                strength = "strong" if strong else "weak"
             hits.append(RuleHit(
                 code="auth_failure_rate",
-                strength="strong" if strong else "weak",
-                weight=rules.strong_weight if strong else rules.weak_weight,
+                strength=strength,
+                weight=weight,
                 observed={"auth_failure_count": failures,
                           "auth_success_count": successes,
                           "auth_failure_ratio": round(auth_ratio, 6)},
